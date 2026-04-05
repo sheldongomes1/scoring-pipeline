@@ -1,4 +1,6 @@
-output/
+output/*.csv
+output/*.json
+!output/.gitkeep
 data/
 __pycache__/
 *.pyc
@@ -11,6 +13,3 @@ dist/
 build/
 .pytest_cache/
 .ruff_cache/
-*.csv
-*.json
-!feature_keys.json

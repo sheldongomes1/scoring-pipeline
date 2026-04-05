@@ -22,9 +22,21 @@ redink-ui / qqq-eval-suite
 
 - After any process step is completed, update the relevant memory file in `~/.claude/projects/-home-sheldongomes-AIProjects-scoring-pipeline/memory/`
 - If a process or config changes, update the affected memory file immediately
-- If a new area of work begins not covered by existing memory, create a file and add it to `MEMORY.md`
+- If a new area of work begins not covered by existing memory, create a new `.md` file and add a pointer to `MEMORY.md`
 - Maintain a running backlog at `~/.claude/projects/-home-sheldongomes-AIProjects-scoring-pipeline/memory/backlog.md`
 - Mark backlog items `[x]` with date when completed
+- Periodically clean up completed backlog items to keep it readable
+
+**Memory files:**
+```
+~/.claude/projects/-home-sheldongomes-AIProjects-scoring-pipeline/memory/
+├── MEMORY.md               ← index (auto-loaded every conversation)
+├── project_overview.md     ← pipeline stages, current state, script flow
+├── scoring_methodology.md  ← 7-step method, features, output schema
+├── project_gcp.md          ← GCS paths, BigQuery config
+├── known_gaps.md           ← data quality issues, missing fields
+└── backlog.md              ← what's done, in progress, up next
+```
 
 ---
 
@@ -36,6 +48,9 @@ redink-ui / qqq-eval-suite
 - **Structured features:** `gs://qqq-anomaly-raw-sg/qqq/{TICKER}/{TICKER}_{YEAR}_{FORM}_analysis_ready.json`
 - **Narrative sections:** `gs://qqq-anomaly-raw-sg/qqq/narrative/{TICKER}/{TICKER}_{YEAR}_{FORM}_narrative.json`
 - **BigQuery project:** `qqq-anomaly-lab`, dataset: `qqq_finance`, table: `period_features`
+- **Scoring outputs (GCS):** `gs://qqq-anomaly-raw-sg/qqq/scoring_output/`
+  - `gs://qqq-anomaly-raw-sg/qqq/scoring_output/quarterly_scores_detailed.csv`
+  - `gs://qqq-anomaly-raw-sg/qqq/scoring_output/top_anomaly_review_pack.csv`
 
 ---
 
@@ -129,6 +144,10 @@ ticker, report_date, form, anomaly_score, driver_1, driver_1_z, driver_2, driver
 
 Then generate `output/top_anomaly_review_pack.csv`: top anomalies across the full universe ranked by score, with filing metadata and driver breakdown.
 
+After writing both CSVs locally, **upload them to GCS** using `src/qqq_scoring/upload.py`:
+- `output/quarterly_scores_detailed.csv` → `gs://qqq-anomaly-raw-sg/qqq/scoring_output/quarterly_scores_detailed.csv`
+- `output/top_anomaly_review_pack.csv` → `gs://qqq-anomaly-raw-sg/qqq/scoring_output/top_anomaly_review_pack.csv`
+
 ---
 
 ## Scripts to build
@@ -153,7 +172,8 @@ scoring-pipeline/
         ├── flatten.py               ← GCS reading + flattening logic
         ├── features.py              ← feature selection + winsorizing
         ├── scorer.py                ← z-score computation + Mahalanobis
-        └── review.py                ← review pack generation
+        ├── review.py                ← review pack generation
+        └── upload.py                ← GCS output upload utility
 ```
 
 ---
@@ -178,10 +198,11 @@ python scripts/score_quarterly_anomalies.py \
   --period-features output/period_features.json \
   --output-dir output
 
-# Build review pack
+# Build review pack and upload outputs to GCS
 python scripts/build_review_pack.py \
   --scores output/quarterly_scores_detailed.csv \
-  --output-dir output
+  --output-dir output \
+  --upload-gcs
 ```
 
 ---
@@ -206,10 +227,10 @@ python scripts/build_review_pack.py \
 
 ## Outputs consumed by downstream repos
 
-| File | Consumed by |
-|------|-------------|
-| `quarterly_scores_detailed.csv` | `qqq-eval-suite`, `redink-ui` |
-| `top_anomaly_review_pack.csv` | `qqq-eval-suite`, `redink-ui` |
+| File | Local path | GCS path | Consumed by |
+|------|-----------|----------|-------------|
+| `quarterly_scores_detailed.csv` | `output/quarterly_scores_detailed.csv` | `gs://qqq-anomaly-raw-sg/qqq/scoring_output/quarterly_scores_detailed.csv` | `qqq-eval-suite`, `redink-ui` |
+| `top_anomaly_review_pack.csv` | `output/top_anomaly_review_pack.csv` | `gs://qqq-anomaly-raw-sg/qqq/scoring_output/top_anomaly_review_pack.csv` | `qqq-eval-suite`, `redink-ui` |
 
 ---
 

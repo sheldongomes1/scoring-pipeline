@@ -77,6 +77,8 @@ def load_gcs_bundles(
 
         record: dict = {
             "ticker": ticker,
+            "company_name": filing.get("company_name"),
+            "cik": filing.get("cik"),
             "form_type": filing.get("form"),
             "report_date": filing.get("report_date"),
             "filing_date": filing.get("filing_date"),

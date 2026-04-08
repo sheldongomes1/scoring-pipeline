@@ -1,6 +1,7 @@
 output/*.csv
 output/*.json
 !output/.gitkeep
+output_gcs_archive/
 data/
 __pycache__/
 *.pyc

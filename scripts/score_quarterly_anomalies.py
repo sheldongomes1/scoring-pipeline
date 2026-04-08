@@ -98,7 +98,7 @@ def main() -> None:
     out_path = os.path.join(args.output_dir, "quarterly_scores_detailed.csv")
     out.to_csv(out_path, index=False)
     print(f"Saved → {out_path}  ({len(out)} rows)")
-    print(f"\nTop 5 anomalies:")
+    print("\nTop 5 anomalies:")
     print(out[["ticker", "report_date", "anomaly_score_0_100", "top_driver_1", "top_driver_1_value"]].head(5).to_string(index=False))
 
 

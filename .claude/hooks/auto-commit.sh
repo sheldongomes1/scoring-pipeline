@@ -12,6 +12,13 @@ STAGED=$(git diff --staged --name-only 2>/dev/null)
 
 # Never commit directly to main — create a feature branch first
 BRANCH=$(git branch --show-current)
+
+# Guard: detached HEAD produces an empty branch name — pushing would fail with "git push origin ''"
+if [ -z "$BRANCH" ]; then
+  echo "[auto-commit] Detached HEAD detected — cannot auto-push. Create a branch first: git checkout -b <name>" >&2
+  exit 1
+fi
+
 if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
   if echo "$STAGED" | grep -qE '^tests?/'; then
     BTYPE="test"

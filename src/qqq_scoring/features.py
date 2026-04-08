@@ -4,7 +4,11 @@ import json
 
 import pandas as pd
 
-_META_COLS = {"ticker", "form_type", "report_date", "filing_date", "accession_number", "filing_url"}
+_META_COLS = {
+    "ticker", "company_name", "cik",
+    "form_type", "year", "feature_count",
+    "report_date", "filing_date", "accession_number", "filing_url",
+}
 
 
 def discover_feature_keys(df: pd.DataFrame) -> list[str]:

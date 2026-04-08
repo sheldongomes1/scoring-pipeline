@@ -70,8 +70,8 @@ def main() -> None:
     summ = summary_scores(zh, zp, zdf, feature_keys)
 
     out = df[["ticker", "form_type", "report_date", "filing_date", "filing_url"]].copy()
-    out.insert(1, "company_name", "")
-    out.insert(2, "cik", "")
+    out.insert(1, "company_name", df.get("company_name", ""))
+    out.insert(2, "cik", df.get("cik", ""))
 
     out["anomaly_score_0_100"] = scores_100
     out["mahalanobis_distance"] = distances

@@ -84,6 +84,21 @@ def peer_zscores(
         and df[sector_col].notna().any()
     )
 
+    # Compute peer_count per row (size of the group actually used for z-scoring)
+    result["peer_count"] = 0
+    if use_sector:
+        _sector_key = cal_quarter.astype(str) + "|" + df[sector_col].fillna("Unknown").astype(str)
+        for _group_label, _grp in df.groupby(_sector_key):
+            if len(_grp) >= min_sector_peers:
+                result.loc[_grp.index, "peer_count"] = len(_grp)
+            else:
+                _quarter_label = _group_label.split("|")[0]
+                _universe_grp = df[cal_quarter == _quarter_label]
+                result.loc[_grp.index, "peer_count"] = len(_universe_grp)
+    else:
+        for _, _grp in df.groupby(cal_quarter):
+            result.loc[_grp.index, "peer_count"] = len(_grp)
+
     for col in feature_keys:
         zname = f"zp_{col}"
         result[zname] = np.nan

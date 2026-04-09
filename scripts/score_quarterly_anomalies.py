@@ -95,6 +95,7 @@ def main() -> None:
     out["peer_relative_score"] = summ["peer_relative_score"]
     out["combined_signal_strength"] = summ["combined_signal_strength"]
     out["num_features_used"] = summ["num_features_used"]
+    out["peer_count"] = zp["peer_count"]
     out = pd.concat([out, drivers_df], axis=1)
     out["model_type"] = "robust_mcd"
 

@@ -28,7 +28,8 @@ def build_divergence_prompt(row: pd.Series, mda_text: str) -> str:
     sector      = row.get("gics_sector", "Unknown")
     quarter     = row.get("calendar_quarter", "")
     anomaly_pct = float(row.get("anomaly_score_0_100", 0))
-    m_flagged   = bool(row.get("beneish_manipulation_flag", False))
+    _beneish_val = row.get("beneish_manipulation_flag", False)
+    m_flagged    = bool(_beneish_val) if pd.notna(_beneish_val) else False
     alert_score = row.get("alert_score", 0)
     top_feats   = _top_features(row, n=5)
 

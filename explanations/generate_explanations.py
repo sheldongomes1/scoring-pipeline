@@ -62,7 +62,8 @@ def compute_alert_score(row: pd.Series) -> int:
         if pd.notna(row[c]) and abs(float(row[c])) > Z_FLAG_THRESHOLD
     )
     mahal_flag  = int(float(row.get("anomaly_score_0_100", 0)) >= MAHAL_FLAG_SCORE)
-    beneish_flag = int(bool(row.get("beneish_manipulation_flag", False)))
+    beneish_val  = row.get("beneish_manipulation_flag", False)
+    beneish_flag = int(bool(beneish_val) if pd.notna(beneish_val) else False)
     return (z_flag_count * Z_FLAG_WEIGHT) + (mahal_flag * MAHAL_WEIGHT) + (beneish_flag * BENEISH_WEIGHT)
 
 

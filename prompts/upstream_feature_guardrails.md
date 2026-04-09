@@ -124,36 +124,34 @@ else:
 
 ### 5. `ocf_to_net_income`
 
-**Denominator:** `net_income`
+**Guard: cap the output, not the input.**
 
-This is the most dangerous ratio in the feature set because near-zero net income is common and legitimate (companies transitioning from loss to profit, seasonal quarters, one-time charges).
+Do not apply a denominator threshold. Instead, compute the ratio and null it if the result exceeds ±10 in absolute value.
 
-**Guard:**
 ```python
-# Use a relative threshold: net_income must be at least 0.5% of total_assets
-# in absolute terms to be a stable denominator.
-# This scales with company size automatically.
-min_income_threshold = 0.005 * total_assets if total_assets else None
-
-if net_income is None:
-    ocf_to_net_income = None
-
-elif min_income_threshold is not None and abs(net_income) < min_income_threshold:
-    ocf_to_net_income = None
-    _flags["ocf_to_net_income_unstable_denominator"] = True
-
-elif net_income == 0:
+if net_income is None or net_income == 0:
     ocf_to_net_income = None
 
 else:
-    ocf_to_net_income = ocf / net_income
+    ratio = ocf / net_income
+    if abs(ratio) > 10:
+        ocf_to_net_income = None
+        _flags["ocf_to_net_income_unstable"] = True
+    else:
+        ocf_to_net_income = ratio
 ```
 
-**Why:** DDOG showed `ocf_to_net_income = -14.39` in the review pack — almost certainly from a near-zero net income quarter. The ratio is analytically meaningful when net income is substantial; it is noise when net income is a rounding error.
+**Why outcome-based, not denominator-based:**
 
-The 0.5% of total assets threshold means: for a $10B company, net income must be at least $50M before we compute the ratio. This is conservative but appropriate — a $50M net income on a $10B asset base is already an extremely thin margin.
+A denominator threshold (e.g. "net_income must be at least X% of assets") forces you to guess upfront whether net income is "too small." That guess is wrong in both directions — it either nulls legitimate near-breakeven readings or still allows extreme ratios through.
 
-**Alternative approach if 0.5% feels too aggressive:** use 1% of revenue as the threshold instead.
+Capping the output at ±10 is directly observable and analytically defensible: no equity analyst interprets `ocf_to_net_income = 14` as a real signal. The ratio is widely meaningful in the range [-5, +5]; beyond ±10 it is universally treated as a data artifact caused by near-zero net income.
+
+**Why ±10 specifically:** A ratio of 10 means OCF is 10x net income — already an extreme earnings quality signal. Beyond that, the magnitude conveys no additional information and only distorts z-score distributions for the rest of the universe.
+
+**Signal is not lost when nulled:** When `ocf_to_net_income` is null because net income is near zero, `accrual_ratio = (net_income - ocf) / avg_assets` captures the same underlying earnings quality signal in a more stable, asset-scaled form. This is precisely why Beneish used the TATA formulation rather than `ocf/net_income` in his manipulation model — he solved this instability problem the same way.
+
+**Confirmed case:** DDOG Q3 2022 showed `ocf_to_net_income = -14.39`. This single value shifted the 95th percentile winsorization boundary for the entire 1,367-filing universe, compressing every other company's z-scores. Writing `null` here removes noise, not signal.
 
 ---
 
@@ -247,7 +245,7 @@ The scoring pipeline will read `_feature_flags` and:
 | `revenue_yoy_growth` | `revenue_prior` | `revenue_prior <= 0` |
 | `accrual_ratio` | `avg_assets` | `avg_assets <= 0` |
 | `ocf_to_assets` | `total_assets` | `assets <= 0` |
-| `ocf_to_net_income` | `net_income` | `abs(net_income) < 0.5% of assets` |
+| `ocf_to_net_income` | `net_income` | `net_income == 0` or `abs(ocf/net_income) > 10` |
 | `equity_multiplier` | `total_equity` | `abs(equity) < 2% of assets` |
 | `assets_yoy_growth` | `assets_prior` | `assets_prior <= 0` |
 

@@ -31,6 +31,7 @@ def main() -> None:
     parser.add_argument("--output-dir", default="output")
     parser.add_argument("--n-drivers", type=int, default=3, help="Number of top driver features to report")
     parser.add_argument("--gcs-bucket", default="qqq-anomaly-raw-sg", help="GCS bucket for reference data")
+    parser.add_argument("--upload-bq", action="store_true", help="Upload quarterly_scores_detailed to BigQuery after scoring")
     args = parser.parse_args()
 
     scored_at = datetime.now(timezone.utc).isoformat()
@@ -123,6 +124,11 @@ def main() -> None:
     print(f"Saved → {out_path}  ({len(out)} rows)")
     print("\nTop 5 anomalies:")
     print(out[["ticker", "report_date", "anomaly_score_0_100", "top_driver_1", "top_driver_1_value"]].head(5).to_string(index=False))
+
+    if args.upload_bq:
+        print("\nUploading scores to BigQuery...")
+        from qqq_scoring.upload import upload_scores_to_bigquery
+        upload_scores_to_bigquery(out)
 
 
 if __name__ == "__main__":

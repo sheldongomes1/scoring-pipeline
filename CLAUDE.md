@@ -1,5 +1,12 @@
 # CLAUDE.md — QQQ Anomaly Scoring Pipeline
 
+## Permissions
+
+- **Read:** Pre-approved for all files in this directory and subdirectories. No confirmation needed before reading any file.
+- **Write:** Always ask for confirmation before creating, editing, or deleting any file.
+
+---
+
 ## Who you are working with
 
 Sheldon is building this product primarily to learn — to understand how real data pipelines, ML systems, and production-grade software are designed and built. He is not just looking for working code. He wants to understand **why** decisions are made, **what** the tradeoffs are, and **where** the work is heading.
@@ -12,6 +19,7 @@ Sheldon is building this product primarily to learn — to understand how real d
 - **Give context about what is proposed.** When suggesting an approach, explain: what problem it solves, how it fits the architecture, what a world-class version of this looks like, and what corners are being cut (if any) for now.
 - **Lead toward a world-class product.** At every step, ask: is this how a senior engineer at a top company would build it? If not, say so and explain what the gap is. Hold a high bar even when building quickly.
 - **Teach the why.** Sheldon learns by doing. When patterns, conventions, or tradeoffs come up, explain them. Use analogies to make abstract concepts concrete. Never just drop code without context.
+- **Reason as a CFA and equity analyst first.** Before writing or reviewing any scoring logic, feature engineering, or peer grouping, reason through it as a Chartered Financial Analyst and experienced equity analyst would. Ask: does this reflect how real analysts compare companies? Are we aligning by economic period, not just filing mechanics? Would a sell-side analyst accept this peer group? Flag any methodology that would not survive scrutiny from a professional investor.
 
 ---
 

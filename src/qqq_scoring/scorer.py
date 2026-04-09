@@ -8,6 +8,22 @@ from sklearn.covariance import MinCovDet
 CLIP = 8.0
 
 
+def to_calendar_quarter(dates: pd.Series) -> pd.Series:
+    """Map report_date values to calendar quarter labels, e.g. '2026-Q1'.
+
+    Groups by the calendar quarter the period-end falls in:
+        Jan–Mar → Q1,  Apr–Jun → Q2,  Jul–Sep → Q3,  Oct–Dec → Q4
+
+    This ensures companies with different fiscal year-ends but overlapping
+    economic periods are compared as peers — e.g. a company with a Jan 31
+    quarter-end and one with a Mar 31 quarter-end both land in Q1 and are
+    scored against each other, as any equity analyst would expect.
+    """
+    dt = pd.to_datetime(dates)
+    quarter = ((dt.dt.month - 1) // 3 + 1)
+    return dt.dt.year.astype(str) + "-Q" + quarter.astype(str)
+
+
 def _robust_zscore(series: pd.Series) -> pd.Series:
     """Robust z-score: (x - median) / (IQR / 1.35).
 
@@ -37,12 +53,20 @@ def self_history_zscores(df: pd.DataFrame, feature_keys: list[str]) -> pd.DataFr
 
 
 def peer_zscores(df: pd.DataFrame, feature_keys: list[str]) -> pd.DataFrame:
-    """Step 4: For each report_date, z-score each feature relative to peers."""
+    """Step 4: For each calendar quarter, z-score each feature relative to peers.
+
+    Groups by calendar quarter (Q1=Jan–Mar, Q2=Apr–Jun, Q3=Jul–Sep, Q4=Oct–Dec)
+    rather than exact report_date. Companies with fiscal quarters ending Jan 31,
+    Feb 28, or Mar 31 all fall in Q1 and are compared as peers — matching how
+    equity analysts align earnings seasons regardless of fiscal year-end.
+    """
     result = df[["ticker", "report_date"]].copy()
+    cal_quarter = to_calendar_quarter(df["report_date"])
+    result["calendar_quarter"] = cal_quarter
     for col in feature_keys:
         zname = f"zp_{col}"
         result[zname] = np.nan
-        for _, grp in df.groupby("report_date"):
+        for _, grp in df.groupby(cal_quarter):
             z = _robust_zscore(grp[col])
             result.loc[z.index, zname] = z.values
     return result

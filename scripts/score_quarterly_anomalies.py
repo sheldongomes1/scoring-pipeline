@@ -18,6 +18,7 @@ from qqq_scoring.scorer import (
     to_percentile_scores,
     summary_scores,
     top_drivers,
+    to_calendar_quarter,
 )
 
 
@@ -50,7 +51,7 @@ def main() -> None:
     zh = self_history_zscores(df, feature_keys)
 
     # Step 4 — peer z-scores
-    print("Step 4: Peer-relative robust z-scores by report_date...")
+    print("Step 4: Peer-relative robust z-scores by calendar quarter...")
     zp = peer_zscores(df, feature_keys)
 
     # Step 5 — combine
@@ -72,6 +73,7 @@ def main() -> None:
     out = df[["ticker", "form_type", "report_date", "filing_date", "filing_url"]].copy()
     out.insert(1, "company_name", df.get("company_name", ""))
     out.insert(2, "cik", df.get("cik", ""))
+    out["calendar_quarter"] = to_calendar_quarter(df["report_date"])
 
     out["anomaly_score_0_100"] = scores_100
     out["mahalanobis_distance"] = distances
@@ -89,7 +91,7 @@ def main() -> None:
     for col in feature_keys:
         out[f"combined_z__{col}"] = zdf[f"z_{col}"]
 
-    out["scoring_version"] = "brick3_q_v2_robust_mahalanobis_clipped"
+    out["scoring_version"] = "brick3_q_v3_calendar_quarter_peers"
     out["scored_at"] = scored_at
 
     out = out.sort_values("anomaly_score_0_100", ascending=False).reset_index(drop=True)

@@ -10,6 +10,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from qqq_scoring.features import load_feature_keys, winsorize
+from qqq_scoring.beneish import compute_beneish
 from qqq_scoring.reference import load_sector_mapping
 from qqq_scoring.scorer import (
     self_history_zscores,
@@ -103,7 +104,15 @@ def main() -> None:
     for col in feature_keys:
         out[f"combined_z__{col}"] = zdf[f"z_{col}"]
 
-    out["scoring_version"] = "brick3_q_v4_sector_adjusted_peers"
+    # Beneish M-Score
+    print("Beneish: Computing M-Score and manipulation flags...")
+    beneish_df = compute_beneish(df)
+    m_score_coverage = beneish_df["beneish_m_score"].notna().sum()
+    flag_count = beneish_df["beneish_manipulation_flag"].sum()
+    print(f"  M-Score computed for {m_score_coverage}/{len(df)} filings — {flag_count} flagged as likely manipulators (M > -2.22)")
+    out = pd.concat([out, beneish_df], axis=1)
+
+    out["scoring_version"] = "brick3_q_v5_beneish"
     out["scored_at"] = scored_at
 
     out = out.sort_values("anomaly_score_0_100", ascending=False).reset_index(drop=True)

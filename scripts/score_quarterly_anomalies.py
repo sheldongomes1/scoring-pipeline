@@ -10,6 +10,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from qqq_scoring.features import load_feature_keys, winsorize
+from qqq_scoring.reference import load_sector_mapping
 from qqq_scoring.scorer import (
     self_history_zscores,
     peer_zscores,
@@ -28,6 +29,7 @@ def main() -> None:
     parser.add_argument("--period-features", default="output/period_features.json")
     parser.add_argument("--output-dir", default="output")
     parser.add_argument("--n-drivers", type=int, default=3, help="Number of top driver features to report")
+    parser.add_argument("--gcs-bucket", default="qqq-anomaly-raw-sg", help="GCS bucket for reference data")
     args = parser.parse_args()
 
     scored_at = datetime.now(timezone.utc).isoformat()
@@ -41,6 +43,15 @@ def main() -> None:
         print(f"  Dropped {before - len(df)} duplicate (ticker, report_date) rows.")
     feature_keys = load_feature_keys(args.feature_keys)
     print(f"  {len(df)} records, {df['ticker'].nunique()} tickers, {len(feature_keys)} features")
+
+    # Step 1b — join GICS sector mapping (pulled fresh from GCS each run)
+    print("Step 1b: Joining sector mapping from GCS...")
+    sectors = load_sector_mapping(args.gcs_bucket)
+    df = df.merge(sectors[["ticker", "gics_sector", "gics_sub_industry"]], on="ticker", how="left")
+    missing_sectors = df["gics_sector"].isna().sum()
+    if missing_sectors:
+        print(f"  Warning: {df[df['gics_sector'].isna()]['ticker'].unique().tolist()} missing sector — falling back to universe peers")
+        df["gics_sector"] = df["gics_sector"].fillna("Unknown")
 
     # Step 2 — winsorize
     print("Step 2: Winsorizing (5th–95th percentile clip)...")
@@ -74,6 +85,7 @@ def main() -> None:
     out.insert(1, "company_name", df.get("company_name", ""))
     out.insert(2, "cik", df.get("cik", ""))
     out["calendar_quarter"] = to_calendar_quarter(df["report_date"])
+    out["gics_sector"] = df.get("gics_sector", "Unknown")
 
     out["anomaly_score_0_100"] = scores_100
     out["mahalanobis_distance"] = distances
@@ -91,7 +103,7 @@ def main() -> None:
     for col in feature_keys:
         out[f"combined_z__{col}"] = zdf[f"z_{col}"]
 
-    out["scoring_version"] = "brick3_q_v3_calendar_quarter_peers"
+    out["scoring_version"] = "brick3_q_v4_sector_adjusted_peers"
     out["scored_at"] = scored_at
 
     out = out.sort_values("anomaly_score_0_100", ascending=False).reset_index(drop=True)

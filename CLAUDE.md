@@ -25,16 +25,29 @@ Sheldon is building this product primarily to learn — to understand how real d
 
 ## Pipeline orchestrator — MANDATORY rule
 
-**`scripts/run_pipeline.py` is the single entry point for the full pipeline.**
+**`scripts/orchestrate.py` is the single entry point for the full pipeline.**
 
-Every time a new step is added to the pipeline — a new scoring module, a new LLM layer, a new BQ output — it **must** be registered in `STEPS` in `run_pipeline.py`. This keeps the orchestrator as the authoritative, always-up-to-date record of what the pipeline does and in what order.
+It is a DAG-aware orchestrator that runs independent steps in parallel. The current execution order is:
 
-When adding a new step:
-1. Add it to `STEPS` in `run_pipeline.py` with the correct `num`, `name`, `script`, `args`, and `note`
-2. Place it at the correct position in the dependency order
-3. Update the step numbers of any subsequent steps if inserting in the middle
+```
+Phase 1: Step 1 → Step 2           (sequential)
+Phase 2: Step 3 ∥ Step 4           (parallel — both depend only on Step 2)
+Phase 3: Step 5                    (depends on Step 4)
+Phase 4: Step 6 ∥ Step 7           (parallel — both depend on Steps 3 + 5)
+```
 
-Do not add pipeline steps without updating the orchestrator.
+**Every time a new element is added to the pipeline — a new script, a new scoring module, a new LLM layer, a new BQ output table — it MUST be either:**
+1. **Added as a new step** in the `STEPS` list in `orchestrate.py` with the correct `num`, `name`, `script`, `args`, `depends_on`, and `note`
+2. **Or incorporated into an existing step** if it is a sub-task of an existing script (e.g. a new column added to an existing output)
+
+**When adding a new step:**
+- Set `depends_on` to the step numbers whose BQ output tables this step reads from
+- Place the step number so it reflects the correct execution phase
+- If the new step is independent of other steps at the same level, it runs in parallel automatically — no extra code needed
+- Update the execution order comment at the top of `orchestrate.py` if the phase structure changes
+- `run_pipeline.py` (the old sequential runner) is kept for reference but `orchestrate.py` is the authoritative entry point
+
+Do not add pipeline scripts without updating `orchestrate.py`.
 
 ---
 

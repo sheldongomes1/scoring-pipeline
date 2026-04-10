@@ -37,7 +37,7 @@ VIEW_ID       = f"{BQ_PROJECT}.{BQ_DATASET}.filing_intelligence"
 PACK_TABLE_ID = f"{BQ_PROJECT}.{BQ_DATASET}.top_anomaly_review_pack"
 
 # Include ALERT + FLAG tiers in the review pack
-PACK_TIERS = ("ALERT", "FLAG")
+PACK_TIERS = ("ALERT", "FLAG", "WATCH")
 
 
 # ── View DDL ──────────────────────────────────────────────────────────────────

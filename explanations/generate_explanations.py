@@ -210,7 +210,7 @@ def main() -> None:
             "gics_sector":             row.get("gics_sector", ""),
             "anomaly_score_0_100":     float(row.get("anomaly_score_0_100", 0)),
             "beneish_m_score":         float(row["beneish_m_score"]) if pd.notna(row.get("beneish_m_score")) else None,
-            "beneish_manipulation_flag": bool(row.get("beneish_manipulation_flag", False)),
+            "beneish_manipulation_flag": bool(row["beneish_manipulation_flag"]) if pd.notna(row.get("beneish_manipulation_flag")) else False,
             "alert_score":             alert,
             "pattern_name":            response.get("pattern_name", ""),
             "pattern_confidence":      response.get("pattern_confidence", ""),

@@ -23,6 +23,21 @@ Sheldon is building this product primarily to learn — to understand how real d
 
 ---
 
+## Pipeline orchestrator — MANDATORY rule
+
+**`scripts/run_pipeline.py` is the single entry point for the full pipeline.**
+
+Every time a new step is added to the pipeline — a new scoring module, a new LLM layer, a new BQ output — it **must** be registered in `STEPS` in `run_pipeline.py`. This keeps the orchestrator as the authoritative, always-up-to-date record of what the pipeline does and in what order.
+
+When adding a new step:
+1. Add it to `STEPS` in `run_pipeline.py` with the correct `num`, `name`, `script`, `args`, and `note`
+2. Place it at the correct position in the dependency order
+3. Update the step numbers of any subsequent steps if inserting in the middle
+
+Do not add pipeline steps without updating the orchestrator.
+
+---
+
 ## What this repo does
 
 This is the scoring layer of the QQQ anomaly detection product. It reads precomputed financial feature bundles from GCS, computes anomaly scores using a 7-step robust z-score method, and produces output files consumed by the UI (`redink-ui`) and eval suite (`qqq-eval-suite`).

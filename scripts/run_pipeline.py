@@ -88,6 +88,13 @@ STEPS = [
         "args":   [],
         "note":   "BQ view joining all tables + materialised review pack → BQ top_anomaly_review_pack",
     },
+    {
+        "num":    7,
+        "name":   "Build trend table → company_trend",
+        "script": "scripts/build_trend_table.py",
+        "args":   [],
+        "note":   "Per-ticker time-series table for UI chart rendering → BQ company_trend (clustered by ticker)",
+    },
 ]
 
 

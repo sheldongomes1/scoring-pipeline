@@ -201,30 +201,40 @@ After writing both CSVs locally, **upload them to GCS** using `src/qqq_scoring/u
 
 ---
 
-## Scripts to build
+## Repo structure
 
 ```
 scoring-pipeline/
 ├── CLAUDE.md                        ← this file
 ├── pyproject.toml                   ← dependencies
+├── docs/
+│   └── task_definition.md           ← full pipeline documentation
 ├── scripts/
-│   ├── flatten_gcs.py               ← Step 0: GCS → flat feature table
-│   ├── discover_feature_keys.py     ← identify which features to score on
-│   ├── score_quarterly_anomalies.py ← Steps 1–7: full scorer
-│   └── build_review_pack.py         ← top anomalies review pack
+│   ├── orchestrate.py               ← PRIMARY ENTRY POINT — DAG orchestrator
+│   ├── run_pipeline.py              ← sequential runner (reference only)
+│   ├── flatten_bq.py                ← Step 1: BQ → period_features.json
+│   ├── score_quarterly_anomalies.py ← Step 2: anomaly scoring + Beneish
+│   ├── build_master_output.py       ← Step 6: BQ view + review pack
+│   └── build_trend_table.py         ← Step 7: per-ticker time-series table
+├── explanations/
+│   ├── generate_explanations.py     ← Step 3: LLM analyst briefs
+│   ├── score_narrative_divergence.py← Step 4: MD&A divergence
+│   ├── compute_conviction.py        ← Step 5: three-pillar conviction score
+│   ├── prompt_template.py           ← prompt builder for analyst briefs
+│   └── divergence_prompt.py         ← prompt builder for divergence analysis
 ├── output/                          ← generated outputs (gitignored)
 │   ├── feature_keys.json
 │   ├── period_features.json
-│   ├── quarterly_scores_detailed.csv
-│   └── top_anomaly_review_pack.csv
+│   └── quarterly_scores_detailed.csv
 └── src/
     └── qqq_scoring/
         ├── __init__.py
-        ├── flatten.py               ← GCS reading + flattening logic
+        ├── flatten.py               ← BQ reading + flattening logic
         ├── features.py              ← feature selection + winsorizing
         ├── scorer.py                ← z-score computation + Mahalanobis
-        ├── review.py                ← review pack generation
-        └── upload.py                ← GCS output upload utility
+        ├── beneish.py               ← Beneish M-Score computation
+        ├── reference.py             ← GICS sector mapping loader
+        └── upload.py                ← GCS/BQ upload utilities
 ```
 
 ---
@@ -232,28 +242,17 @@ scoring-pipeline/
 ## How to run
 
 ```bash
-# Prerequisites
-export SEC_API_EMAIL=sheldon.gomes@gmail.com
-gcloud auth application-default login  # if not already authenticated
+# Full pipeline (recommended)
+python scripts/orchestrate.py
 
-# Step 0: flatten GCS bundles to local feature table
-python scripts/flatten_gcs.py \
-  --gcs-bucket qqq-anomaly-raw-sg \
-  --gcs-prefix qqq \
-  --form-type 10-Q \
-  --output-dir output
+# Resume from a specific step
+python scripts/orchestrate.py --from-step 3
 
-# Steps 1–7: score all quarterly filings
-python scripts/score_quarterly_anomalies.py \
-  --feature-keys output/feature_keys.json \
-  --period-features output/period_features.json \
-  --output-dir output
+# Run specific steps only
+python scripts/orchestrate.py --steps 5,6,7
 
-# Build review pack and upload outputs to GCS
-python scripts/build_review_pack.py \
-  --scores output/quarterly_scores_detailed.csv \
-  --output-dir output \
-  --upload-gcs
+# Preview without executing
+python scripts/orchestrate.py --dry-run
 ```
 
 ---
@@ -261,18 +260,10 @@ python scripts/build_review_pack.py \
 ## Dependencies
 
 - `google-cloud-storage` — read from GCS
-- `google-cloud-bigquery` — optional, for BigQuery load/query
+- `google-cloud-bigquery` — BigQuery load/query
+- `anthropic` — Claude API for LLM explanation layers
 - `pandas`, `numpy`, `scikit-learn` — feature processing and scoring
 - `pyarrow` — for BigQuery/parquet I/O
-
----
-
-## First steps when opening this project
-
-1. **Check if `score_quarterly_anomalies.py` exists in Cloud Shell** — if the user has it, paste the contents into `scripts/score_quarterly_anomalies.py` and adapt it to read from GCS instead of BigQuery
-2. **If not available**, reconstruct it from scratch following the 7-step methodology above
-3. Start with `flatten_gcs.py` — get the feature table working first, inspect the data, then build the scorer on top of it
-4. Run on a small subset first: `--max-tickers 5` or `--tickers AAPL,MSFT,NVDA`
 
 ---
 

@@ -85,6 +85,7 @@ def _compute_row(row: pd.Series) -> dict:
     cl_t     = _v(row, "b_curr_current_liabilities")
     ni_t     = _v(row, "b_curr_net_income")
     ocf_t    = _v(row, "b_curr_operating_cash_flow")
+    sbc_t    = _v(row, "b_curr_stock_based_compensation")
 
     # ── Prior year same period ───────────────────────────────────────────────
     ar_p     = _v(row, "b_prior_accounts_receivable")
@@ -142,10 +143,19 @@ def _compute_row(row: pd.Series) -> dict:
 
     # ── Component 7: TATA — Total Accruals to Total Assets ──────────────────
     # Core earnings quality signal: high accruals = earnings not backed by cash
-    # (NetIncome_t - OCF_t) / Assets_t
-    # This is the only current-period-only component — no prior year needed.
+    # SBC-adjusted formula: (NetIncome_t + SBC_t - OCF_t) / Assets_t
+    #
+    # Why the adjustment: SBC is a non-cash expense that reduces Net Income but
+    # is added back in Operating Cash Flow. Without adjustment, high-SBC growth
+    # companies (PLTR, CRWD, APP) produce deeply negative TATA — not because
+    # earnings are accrual-inflated, but because NI and OCF treat SBC differently.
+    # Adding SBC back to NI restores parity and removes this structural false positive.
+    #
+    # Graceful degradation: if SBC is unavailable (upstream not yet supplying it),
+    # sbc_adj defaults to 0 and behaviour is identical to the original formula.
     if ni_t is not None and ocf_t is not None and assets_t:
-        tata = (ni_t - ocf_t) / assets_t
+        sbc_adj = sbc_t if sbc_t is not None else 0.0
+        tata = (ni_t + sbc_adj - ocf_t) / assets_t
         # TATA is naturally bounded; values beyond ±1 indicate bad upstream data
         tata = tata if abs(tata) <= 1.0 else None
     else:

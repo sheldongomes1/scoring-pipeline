@@ -3,7 +3,7 @@
 
 Dependency graph:
 
-  Step 1 ──► Step 2 ──► Step 3 ──────────────────────────────────────► Step 6
+  Step 1 ──► Step 2 ──► Step 3 ──────────────────────────────────────► Step 6 ──► Step 8
                     └──► Step 4 ──► Step 5 ────────────────────────────► Step 7
 
 Parallel phases:
@@ -11,6 +11,7 @@ Parallel phases:
   Phase 2: Step 3 ∥ Step 4           (parallel — both depend only on Step 2)
   Phase 3: Step 5                    (starts as soon as Step 4 done, not Step 3)
   Phase 4: Step 6 ∥ Step 7           (parallel — both depend on Steps 3 + 5)
+  Phase 5: Step 8                    (depends on Step 6 — filing_intelligence must exist)
 
 Wall-clock savings vs sequential:
   - Steps 3 + 4 run simultaneously  (~3 min saved on LLM batch calls)
@@ -106,6 +107,14 @@ STEPS = [
         "args":       [],
         "depends_on": [3, 5],                       # parallel with Step 6
         "note":       "Per-ticker time-series for UI charts → BQ company_trend",
+    },
+    {
+        "num":        8,
+        "name":       "Generate analyst actions → analyst_actions",
+        "script":     "explanations/generate_analyst_actions.py",
+        "args":       [],
+        "depends_on": [6],                          # needs filing_intelligence view
+        "note":       "CFA-grade next_step / key_question / watch_signal per filing → BQ analyst_actions",
     },
 ]
 
@@ -239,6 +248,7 @@ class Orchestrator:
         self._log("  Phase 2: Step 3 ∥ Step 4   (parallel)")
         self._log("  Phase 3: Step 5")
         self._log("  Phase 4: Step 6 ∥ Step 7   (parallel)")
+        self._log("  Phase 5: Step 8")
         self._log("")
 
         # Launch all selected steps as threads — each waits on its own deps

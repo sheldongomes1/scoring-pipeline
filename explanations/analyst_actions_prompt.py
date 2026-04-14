@@ -180,20 +180,30 @@ Follow the grounding rules exactly.
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+def _is_missing(val) -> bool:
+    """True for None, NaN, pd.NA, NaT — safe on scalars of any type."""
+    if val is None:
+        return True
+    try:
+        return bool(pd.isna(val))
+    except (TypeError, ValueError):
+        return False
+
+
 def _v(row: pd.Series, col: str, default: str = "null") -> str:
     """Return string value for a column, defaulting when null/NaN."""
     val = row.get(col)
-    if val is None or (isinstance(val, float) and pd.isna(val)):
+    if _is_missing(val):
         return default
     return str(val)
 
 
-def _driver_line(label_raw: str | None, z_val: str | float | None) -> str:
+def _driver_line(label_raw, z_val) -> str:
     """Format a single driver line with human-readable label."""
-    if not label_raw or label_raw == "null":
+    if _is_missing(label_raw) or not str(label_raw).strip():
         return "null"
     label = DRIVER_LABELS.get(str(label_raw), str(label_raw))
-    if z_val is None or (isinstance(z_val, float) and pd.isna(z_val)):
+    if _is_missing(z_val):
         return f"{label}  (z = null)"
     try:
         return f"{label}  (z = {float(z_val):+.2f})"
@@ -212,11 +222,7 @@ def build_analyst_actions_prompt(row: pd.Series) -> str:
 
     # Cited passage — omit block entirely if missing
     cited = row.get("cited_passage")
-    has_cited = (
-        cited is not None
-        and not (isinstance(cited, float) and pd.isna(cited))
-        and str(cited).strip()
-    )
+    has_cited = not _is_missing(cited) and str(cited).strip()
     cited_block = (
         f'\n  Cited MD&A passage (verbatim from filing):\n  "{cited}"\n'
         if has_cited else ""
@@ -229,7 +235,7 @@ def build_analyst_actions_prompt(row: pd.Series) -> str:
 
     # Beneish flag — normalise to true/false/null
     bf_raw = row.get("beneish_manipulation_flag")
-    if bf_raw is None or (isinstance(bf_raw, float) and pd.isna(bf_raw)):
+    if _is_missing(bf_raw):
         beneish_flag_str = "null"
     else:
         beneish_flag_str = "true" if bool(bf_raw) else "false"

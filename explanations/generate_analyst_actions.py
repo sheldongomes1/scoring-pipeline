@@ -50,11 +50,11 @@ API_DELAY_SEC     = 0.5
 # Tiers to process (WATCH included — produces MONITOR urgency, still useful)
 TARGET_TIERS      = ("ALERT", "FLAG", "WATCH")
 
-# Valid urgency tier values
-VALID_URGENCY     = {"ACT NOW", "INVESTIGATE", "MONITOR"}
+# Valid urgency tier values — concern levels, not commands
+VALID_URGENCY     = {"CRITICAL", "INVESTIGATE", "CONTEXTUAL"}
 
 # Required non-empty string fields in the response
-REQUIRED_FIELDS   = ["next_step", "key_question", "watch_signal",
+REQUIRED_FIELDS   = ["investigation_path", "key_question", "persistence_test",
                      "priority_section", "urgency_tier"]
 
 # Banned phrases that indicate hallucination or policy violation
@@ -274,9 +274,9 @@ def main() -> None:
             "calendar_quarter":         quarter,
             "conviction_tier":          str(row.get("conviction_tier", "")),
             "conviction_score":         float(row.get("conviction_score", 0) or 0),
-            "next_step":                response["next_step"],
+            "investigation_path":       response["investigation_path"],
             "key_question":             response["key_question"],
-            "watch_signal":             response["watch_signal"],
+            "persistence_test":         response["persistence_test"],
             "priority_section":         response["priority_section"],
             "urgency_tier":             response["urgency_tier"],
             "filing_section_rationale": response.get("filing_section_rationale") or None,
@@ -284,7 +284,7 @@ def main() -> None:
             "generated_at":             generated_at,
         })
         print(f"  urgency={response['urgency_tier']} | section={response['priority_section']}")
-        print(f"  next_step: {response['next_step'][:100]}...")
+        print(f"  investigation: {response['investigation_path'][:100]}...")
 
         time.sleep(API_DELAY_SEC)
 
@@ -307,7 +307,7 @@ def main() -> None:
             u = r["urgency_tier"]
             urgency_counts[u] = urgency_counts.get(u, 0) + 1
         print("\n── Urgency tier distribution ──")
-        for tier in ["ACT NOW", "INVESTIGATE", "MONITOR"]:
+        for tier in ["CRITICAL", "INVESTIGATE", "CONTEXTUAL"]:
             print(f"  {tier:12s}: {urgency_counts.get(tier, 0)}")
 
     print("\nDone.")

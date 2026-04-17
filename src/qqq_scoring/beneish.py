@@ -115,10 +115,27 @@ def _compute_row(row: pd.Series) -> dict:
     gmi = _index(gm_p, gm_t)  # note: prior over current (higher = worse margin)
 
     # ── Component 3: AQI — Asset Quality Index ───────────────────────────────
-    # Rising non-current, non-tangible assets → capitalising expenses
-    # [1-(CA_t+PPE_t)/Assets_t] / [1-(CA_{t-1}+PPE_{t-1})/Assets_{t-1}]
-    aqi_t = (1 - (ca_t + ppe_t) / assets_t) if (ca_t is not None and ppe_t is not None and assets_t) else None
-    aqi_p = (1 - (ca_p + ppe_p) / assets_p) if (ca_p is not None and ppe_p is not None and assets_p) else None
+    # Fraction of non-current, non-tangible assets — rising ratio suggests
+    # management is capitalising operating costs rather than expensing them.
+    # Original: [1-(CA+PPE)/Assets] current / prior.
+    #
+    # Goodwill + intangibles strip: Beneish was designed to catch capitalised
+    # operating expenses (deferred costs, capitalised R&D). Goodwill and
+    # acquired intangibles from M&A are a different beast — purchase-accounting
+    # artifacts, not management-discretion accruals. Serial acquirers (CSCO 49%,
+    # ADBE 45%, AMD 35%, KHC 32%, MSFT 21% of assets in goodwill) systematically
+    # tripped AQI under the original formula. Stripping goodwill + intangibles
+    # from the numerator isolates the capitalisation signal Beneish actually
+    # intended to catch.
+    #
+    # Graceful degradation: null goodwill/intangibles treated as 0. Non-acquirers
+    # (NVDA, COST) see no change vs the original formula.
+    gw_t  = _v(row, "b_curr_goodwill")            or 0.0
+    int_t = _v(row, "b_curr_intangible_assets_net") or 0.0
+    gw_p  = _v(row, "b_prior_goodwill")           or 0.0
+    int_p = _v(row, "b_prior_intangible_assets_net") or 0.0
+    aqi_t = (1 - (ca_t + ppe_t + gw_t + int_t) / assets_t) if (ca_t is not None and ppe_t is not None and assets_t) else None
+    aqi_p = (1 - (ca_p + ppe_p + gw_p + int_p) / assets_p) if (ca_p is not None and ppe_p is not None and assets_p) else None
     aqi = _index(aqi_t, aqi_p)
 
     # ── Component 4: SGI — Sales Growth Index ───────────────────────────────

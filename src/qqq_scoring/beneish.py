@@ -141,7 +141,18 @@ def _compute_row(row: pd.Series) -> dict:
     # ── Component 4: SGI — Sales Growth Index ───────────────────────────────
     # High growth → more incentive and opportunity to manipulate
     # Rev_t / Rev_{t-1}
+    #
+    # 50%-YoY cap: Beneish 1999 was fit on a sample where SGI rarely exceeded
+    # 1.5. Applying the linear coefficient (0.892) to hypergrowth SGI values
+    # (NVDA SGI=3.6 in AI super-cycle) is out-of-distribution extrapolation —
+    # the coefficient isn't calibrated at that range. A filing growing 50% YoY
+    # is already unambiguously a "high-growth" signal to the model; growing
+    # 200% or 300% YoY doesn't add three more units of manipulation evidence.
+    # Cap preserves rank-ordering while bounding the runaway effect on
+    # hypergrowth semis (NVDA, AVGO, APP) that otherwise dominate flagging.
     sgi = _index(rev_t, rev_p)
+    if sgi is not None and sgi > 1.5:
+        sgi = 1.5
 
     # ── Component 5: DEPI — Depreciation Index ──────────────────────────────
     # Slowing depreciation rate → extending asset lives to inflate earnings

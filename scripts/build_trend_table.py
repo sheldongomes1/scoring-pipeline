@@ -39,10 +39,12 @@ OUTPUT_TABLE = f"{BQ_PROJECT}.{BQ_DATASET}.company_trend"
 
 FEATURE_KEYS = [
     "debt_to_assets",
+    "equity_to_assets",
     "net_margin",
     "ocf_to_net_income",
     "ocf_to_assets",
     "accrual_ratio",
+    "equity_multiplier",
     "revenue_growth_yoy",
     "assets_growth_yoy",
     "net_income_growth_yoy",

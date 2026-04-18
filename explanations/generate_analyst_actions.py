@@ -60,11 +60,14 @@ VALID_URGENCY     = {"CRITICAL", "INVESTIGATE", "CONTEXTUAL"}
 REQUIRED_FIELDS   = ["investigation_path", "key_question", "persistence_test",
                      "priority_section", "urgency_tier"]
 
-# Banned phrases that indicate hallucination or policy violation
+# Banned phrases that indicate hallucination or policy violation.
+# buy/sell verbs are constrained to trading-context nouns to avoid false
+# positives on legitimate financial English ("average selling price",
+# "consumer buying behaviour", "selling, general & administrative").
 BANNED_PATTERNS   = [
     r"\bfraud\b",
-    r"\bbuying?\b",
-    r"\bselling?\b",
+    r"\b(?:buy|sell)\s+(?:recommendation|rating|signal|side|opportunity|target|call)\b",
+    r"\b(?:buy|sell|short)\s+(?:the\s+)?(?:stock|shares|security|securities|equity|name|position)\b",
     r"\boverweight\b",
     r"\bunderweight\b",
 ]

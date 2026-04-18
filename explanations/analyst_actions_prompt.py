@@ -113,11 +113,11 @@ Input:
 
 Expected output:
 {
+  "urgency_tier": "CRITICAL",
   "investigation_path": "Analysis focuses on reconciling the Cash Flow Statement's operating section against the income statement — the data shows OCF / Net Income at −5.2 standard deviations below baseline while net income grew materially, and the Beneish M-Score independently crosses the −1.78 manipulation threshold. The core analytical question is whether working capital movements or non-cash charges account for the full gap, and whether management's normalization claim is supported by specific disclosure.",
   "key_question": "Does the Cash Flow from Operations section provide a line-item reconciliation that fully explains why operating cash flow diverged from net income at this magnitude, or does the gap remain unaccounted for after reading the footnotes?",
   "persistence_test": "This pattern would escalate from ALERT to a confirmed earnings-quality concern if OCF / Net Income does not recover toward historical baseline in a subsequent filing, or if Accrual Ratio remains above +3.0 standard deviations — indicating the divergence is structural rather than a one-quarter anomaly.",
   "priority_section": "Cash Flows from Operations",
-  "urgency_tier": "CRITICAL",
   "filing_section_rationale": "The OCF / Net Income divergence is the primary driver and is most directly evidenced in the operating activities section of the cash flow statement, not the income statement."
 }
 
@@ -134,11 +134,11 @@ Input:
 
 Expected output:
 {
+  "urgency_tier": "INVESTIGATE",
   "investigation_path": "The pattern warrants examination of whether management's cited explanation for Revenue Growth (YoY) at +7.2 standard deviations above baseline reflects a structural shift or a single-quarter acceleration. An analyst reviewing this filing would focus on segment-level revenue disclosure in the Results of Operations section and any guidance on the sustainability of margin expansion.",
   "key_question": "Does management quantify the revenue and margin contribution of the specific product or platform cited in the MD&A, or is the disclosure qualitative only?",
   "persistence_test": "If Revenue Growth (YoY) and Net Margin remain elevated in a subsequent filing and management continues to corroborate the driver in MD&A, the pattern strengthens to a confirmed inflection; Accrual Ratio and OCF / Net Income staying within normal range would provide additional confirmation that earnings quality supports the top-line growth.",
-  "priority_section": "Results of Operations",
-  "urgency_tier": "INVESTIGATE"
+  "priority_section": "Results of Operations"
 }
 
 --- END EXAMPLES ---
@@ -149,9 +149,21 @@ Expected output:
 
 OUTPUT_SCHEMA = """\
 Produce the following JSON object. Every field is required unless marked optional.
-Follow the voice contract and grounding rules exactly.
+Emit fields in the exact order listed below. Follow the voice contract and grounding
+rules exactly.
 
 {
+  "urgency_tier": string,
+    // Emit this field FIRST. Describes concern level, not a command to act.
+    // Assign exactly one of: "CRITICAL" | "INVESTIGATE" | "CONTEXTUAL"
+    // Apply in order, first match wins:
+    //   "CRITICAL"    → conviction_tier = ALERT AND divergence_label = CONTRADICTS
+    //   "CRITICAL"    → conviction_tier = ALERT AND beneish_flag = true
+    //   "INVESTIGATE" → conviction_tier = ALERT
+    //   "INVESTIGATE" → conviction_tier = FLAG AND divergence_label = CONTRADICTS
+    //   "INVESTIGATE" → conviction_tier = FLAG AND beneish_flag = true
+    //   "CONTEXTUAL"  → all other cases
+
   "investigation_path": string,
     // What an analyst reviewing this filing would investigate and why.
     // Analytical voice — describe the investigation, do not issue commands.
@@ -187,17 +199,6 @@ Follow the voice contract and grounding rules exactly.
     //   "Results of Operations", "Cash Flows from Operations",
     //   "Notes to Financial Statements", "Management's Discussion and Analysis"
     // Derive from top_driver_1 and pattern_name. Do not invent note numbers.
-
-  "urgency_tier": string,
-    // Describes concern level, not a command to act. Assign exactly one of:
-    //   "CRITICAL" | "INVESTIGATE" | "CONTEXTUAL"
-    // Apply in order, first match wins:
-    //   "CRITICAL"    → conviction_tier = ALERT AND divergence_label = CONTRADICTS
-    //   "CRITICAL"    → conviction_tier = ALERT AND beneish_flag = true
-    //   "INVESTIGATE" → conviction_tier = ALERT
-    //   "INVESTIGATE" → conviction_tier = FLAG AND divergence_label = CONTRADICTS
-    //   "INVESTIGATE" → conviction_tier = FLAG AND beneish_flag = true
-    //   "CONTEXTUAL"  → all other cases
 
   "filing_section_rationale": string   // OPTIONAL — omit if connection is direct
     // One sentence explaining why priority_section is the right place to start.

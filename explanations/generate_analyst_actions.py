@@ -9,8 +9,11 @@ Rows that fail validation are written to `qqq_finance.analyst_actions_rejected`
 with the raw LLM response for inspection.
 
 Usage:
-    # Batch mode — all ALERT + FLAG + WATCH rows (default)
+    # Batch mode — all ALERT + FLAG + WATCH rows missing from analyst_actions
     python explanations/generate_analyst_actions.py
+
+    # Full refresh — regenerate ALL tiered filings (replaces entire table)
+    python explanations/generate_analyst_actions.py --full-refresh
 
     # Single filing
     python explanations/generate_analyst_actions.py --ticker PLTR --quarter 2024-Q3
@@ -81,24 +84,39 @@ VALID_PRIORITY_SECTIONS = {
 
 def load_filings(client: bigquery.Client,
                  ticker: str | None,
-                 quarter: str | None) -> pd.DataFrame:
-    """Query filing_intelligence for rows to process."""
+                 quarter: str | None,
+                 full_refresh: bool = False) -> pd.DataFrame:
+    """Query filing_intelligence for rows to process.
+
+    By default, skips filings that already have an entry in analyst_actions
+    (incremental mode).  Pass full_refresh=True to load ALL tiered filings
+    regardless.
+    """
     tiers_str = ", ".join(f"'{t}'" for t in TARGET_TIERS)
-    conditions = [f"conviction_tier IN ({tiers_str})"]
+    conditions = [f"fi.conviction_tier IN ({tiers_str})"]
 
     if ticker:
-        conditions.append(f"ticker = '{ticker}'")
+        conditions.append(f"fi.ticker = '{ticker}'")
     if quarter:
-        conditions.append(f"calendar_quarter = '{quarter}'")
+        conditions.append(f"fi.calendar_quarter = '{quarter}'")
+
+    # Incremental: skip filings already in analyst_actions
+    if not full_refresh and not ticker:
+        conditions.append(f"""NOT EXISTS (
+            SELECT 1 FROM `{OUTPUT_TABLE}` aa
+            WHERE aa.ticker = fi.ticker
+              AND aa.calendar_quarter = fi.calendar_quarter
+        )""")
 
     where = " AND ".join(conditions)
     query = f"""
-        SELECT *
-        FROM `{SOURCE_VIEW}`
+        SELECT fi.*
+        FROM `{SOURCE_VIEW}` fi
         WHERE {where}
-        ORDER BY conviction_score DESC, anomaly_score_0_100 DESC
+        ORDER BY fi.conviction_score DESC, fi.anomaly_score_0_100 DESC
     """
-    print(f"Loading from {SOURCE_VIEW}...")
+    mode = "full refresh" if full_refresh else "incremental (skipping existing)"
+    print(f"Loading from {SOURCE_VIEW} [{mode}]...")
     df = client.query(query).to_dataframe()
     print(f"  {len(df)} rows ({df['conviction_tier'].value_counts().to_dict() if len(df) else 'none'})")
     return df
@@ -107,11 +125,20 @@ def load_filings(client: bigquery.Client,
 def _upload(client: bigquery.Client,
             rows: list[dict],
             table_id: str,
-            date_col: str = "report_date") -> None:
-    """Write rows to a BQ table (WRITE_TRUNCATE — full refresh each run)."""
+            date_col: str = "report_date",
+            truncate: bool = False) -> None:
+    """Write rows to a BQ table.
+
+    Args:
+        truncate: If True, replace the entire table (WRITE_TRUNCATE).
+                  If False (default), append new rows (WRITE_APPEND).
+    """
     if not rows:
         print(f"  No rows to upload to {table_id}.")
         return
+
+    disposition = (bigquery.WriteDisposition.WRITE_TRUNCATE if truncate
+                   else bigquery.WriteDisposition.WRITE_APPEND)
 
     df = pd.DataFrame(rows)
     if date_col in df.columns:
@@ -123,7 +150,7 @@ def _upload(client: bigquery.Client,
 
     job_config = bigquery.LoadJobConfig(
         source_format=bigquery.SourceFormat.PARQUET,
-        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+        write_disposition=disposition,
         time_partitioning=bigquery.TimePartitioning(
             type_=bigquery.TimePartitioningType.DAY,
             field=date_col,
@@ -132,7 +159,8 @@ def _upload(client: bigquery.Client,
     )
     job = client.load_table_from_file(buf, table_id, job_config=job_config)
     job.result()
-    print(f"  Uploaded {len(df)} rows → {table_id}")
+    mode = "TRUNCATE" if truncate else "APPEND"
+    print(f"  Uploaded {len(df)} rows → {table_id}  [{mode}]")
 
 
 # ── Claude API ────────────────────────────────────────────────────────────────
@@ -166,6 +194,53 @@ def call_claude(user_prompt: str) -> dict | None:
     except Exception as e:
         print(f"  API error: {e}")
         return None
+
+
+URGENCY_RETRY_PROMPT = """\
+You previously generated an analyst brief but omitted the required `urgency_tier` field.
+
+Given the inputs below, return JSON with EXACTLY this shape and nothing else:
+{"urgency_tier": "CRITICAL" | "INVESTIGATE" | "CONTEXTUAL"}
+
+Apply these rules in order, first match wins:
+  "CRITICAL"    → conviction_tier = ALERT AND divergence_label = CONTRADICTS
+  "CRITICAL"    → conviction_tier = ALERT AND beneish_flag = true
+  "INVESTIGATE" → conviction_tier = ALERT
+  "INVESTIGATE" → conviction_tier = FLAG AND divergence_label = CONTRADICTS
+  "INVESTIGATE" → conviction_tier = FLAG AND beneish_flag = true
+  "CONTEXTUAL"  → all other cases
+
+Inputs:
+  conviction_tier: {tier}
+  divergence_label: {div_label}
+  beneish_flag: {beneish_flag}
+"""
+
+
+def retry_urgency_tier(row: pd.Series) -> str | None:
+    """Single-shot follow-up call to recover a dropped urgency_tier field.
+
+    Returns the tier string if the model produces a valid value, else None.
+    Only the deterministic mapping inputs are passed — no narrative content.
+    """
+    tier = str(row.get("conviction_tier", "")).strip() or "UNKNOWN"
+    div_label = str(row.get("divergence_label", "")).strip() or "NEUTRAL"
+    bf_raw = row.get("beneish_manipulation_flag")
+    if bf_raw is None or (isinstance(bf_raw, float) and pd.isna(bf_raw)):
+        beneish_flag = "false"
+    else:
+        beneish_flag = "true" if bool(bf_raw) else "false"
+
+    prompt = URGENCY_RETRY_PROMPT.format(
+        tier=tier, div_label=div_label, beneish_flag=beneish_flag,
+    )
+    response = call_claude(prompt)
+    if response is None:
+        return None
+    val = response.get("urgency_tier")
+    if isinstance(val, str) and val.strip() in VALID_URGENCY:
+        return val.strip()
+    return None
 
 
 # ── Validation ────────────────────────────────────────────────────────────────
@@ -206,15 +281,18 @@ def validate_response(response: dict) -> tuple[bool, str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate analyst action briefs")
-    parser.add_argument("--ticker",   default=None, help="Single ticker (e.g. PLTR)")
-    parser.add_argument("--quarter",  default=None, help="Single quarter (e.g. 2024-Q3)")
-    parser.add_argument("--dry-run",  action="store_true",
+    parser.add_argument("--ticker",        default=None, help="Single ticker (e.g. PLTR)")
+    parser.add_argument("--quarter",       default=None, help="Single quarter (e.g. 2024-Q3)")
+    parser.add_argument("--full-refresh",  action="store_true",
+                        help="Regenerate ALL tiered filings (replaces entire table)")
+    parser.add_argument("--dry-run",       action="store_true",
                         help="Print prompts without calling Claude")
     args = parser.parse_args()
 
     bq_client = bigquery.Client(project=BQ_PROJECT)
 
-    df = load_filings(bq_client, args.ticker, args.quarter)
+    df = load_filings(bq_client, args.ticker, args.quarter,
+                      full_refresh=args.full_refresh)
     if df.empty:
         print("No qualifying filings found.")
         return
@@ -253,6 +331,16 @@ def main() -> None:
             continue
 
         is_valid, reason = validate_response(response)
+
+        # Recovery path: if urgency_tier is the only thing missing, try a
+        # focused single-shot follow-up before rejecting the whole brief.
+        if not is_valid and reason == "Missing or empty required field: urgency_tier":
+            recovered = retry_urgency_tier(row)
+            if recovered:
+                response["urgency_tier"] = recovered
+                is_valid, reason = validate_response(response)
+                if is_valid:
+                    print(f"  RECOVERED — patched urgency_tier={recovered}")
 
         if not is_valid:
             print(f"  REJECTED — {reason}")
@@ -296,9 +384,9 @@ def main() -> None:
     print(f"\n── Results ──────────────────────────────────────────────────────")
     print(f"  Accepted: {len(results)} | Rejected: {len(rejected)}")
 
-    _upload(bq_client, results,  OUTPUT_TABLE)
+    _upload(bq_client, results,  OUTPUT_TABLE,  truncate=args.full_refresh)
     if rejected:
-        _upload(bq_client, rejected, REJECTED_TABLE)
+        _upload(bq_client, rejected, REJECTED_TABLE, truncate=args.full_refresh)
 
     # Print urgency distribution
     if results:

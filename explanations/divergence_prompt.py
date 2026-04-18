@@ -86,8 +86,9 @@ Rules for cited_passage:
 - Should be the sentence or phrase that most directly demonstrates the divergence_label you chose.
 - If the label is NEUTRAL, cite the most relevant passage even if it is indirect.
 - Maximum 2 sentences.
+- CRITICAL: Escape all double quotes inside the passage with a backslash (e.g. \"word\"). The cited_passage value must be valid inside a JSON string.
 
-Respond with a JSON object in this exact structure:
+Respond with a JSON object in this exact structure. Ensure the output is valid JSON — escape any double quotes or special characters inside string values:
 {{
   "divergence_label": "<{label_choices}>",
   "confidence_score": <float between 0.0 and 1.0>,

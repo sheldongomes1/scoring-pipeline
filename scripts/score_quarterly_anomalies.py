@@ -43,6 +43,23 @@ def main() -> None:
     df = df.drop_duplicates(subset=["ticker", "report_date"]).reset_index(drop=True)
     if before != len(df):
         print(f"  Dropped {before - len(df)} duplicate (ticker, report_date) rows.")
+
+    # Dedup calendar-quarter collisions: when two filings for the same ticker
+    # map to the same calendar quarter (e.g. fiscal year-end transitions where
+    # report_dates Jul-01 and Sep-30 both fall in Q3), keep only the row with
+    # the LATEST report_date — it represents the most recent economic period.
+    df["report_date"] = pd.to_datetime(df["report_date"])
+    df["_cq"] = to_calendar_quarter(df["report_date"])
+    before_cq = len(df)
+    df = (
+        df.sort_values("report_date")
+        .drop_duplicates(subset=["ticker", "_cq"], keep="last")
+        .reset_index(drop=True)
+    )
+    df = df.drop(columns=["_cq"])
+    if before_cq != len(df):
+        print(f"  Dropped {before_cq - len(df)} calendar-quarter duplicate rows (kept latest report_date per ticker+quarter).")
+
     feature_keys = load_feature_keys(args.feature_keys)
     print(f"  {len(df)} records, {df['ticker'].nunique()} tickers, {len(feature_keys)} features")
 

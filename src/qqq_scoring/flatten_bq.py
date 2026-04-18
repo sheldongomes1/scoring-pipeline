@@ -24,6 +24,11 @@ def load_bq_filings(
           -- not operations, making it non-comparable to every other QQQ constituent.
           -- Including it would contaminate peer z-scores for companies sharing its report_date.
           AND ticker != 'MSTR'
+          -- GOOGL excluded: same legal entity as GOOG (CIK 1652044). Both share
+          -- classes file under a single SEC CIK, producing identical financials.
+          -- Keeping both would double-count Alphabet in every peer group and
+          -- inflate peer_count. We retain GOOG (Class C, primary trading ticker).
+          AND ticker != 'GOOGL'
     """
 
     print(f"Querying BigQuery: {project}.qqq_anomaly.filings (form={form_type}) ...")

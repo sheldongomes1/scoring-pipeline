@@ -3,22 +3,28 @@
 
 Dependency graph:
 
-  Step 1 ──► Step 2 ──► Step 3 ──────────────────────────────────────► Step 6 ──► Step 8
-                    └──► Step 4 ──► Step 5 ────────────────────────────► Step 7
+  Step 1 ──► Step 2 ──► Step 4 ──► Step 5 ──► Step 3 ──► Step 6 ──► Step 8
+                                          └──────────────► Step 7
 
 Parallel phases:
   Phase 1: Step 1 → Step 2           (sequential — each depends on the previous)
-  Phase 2: Step 3 ∥ Step 4           (parallel — both depend only on Step 2)
-  Phase 3: Step 5                    (starts as soon as Step 4 done, not Step 3)
-  Phase 4: Step 6 ∥ Step 7           (parallel — both depend on Steps 3 + 5)
+  Phase 2: Step 4                    (narrative divergence — depends on Step 2)
+  Phase 3: Step 5                    (conviction scores — depends on Step 4)
+  Phase 4: Step 3 ∥ Step 6 ∥ Step 7  (parallel — all depend on Step 5)
   Phase 5: Step 8                    (depends on Step 6 — filing_intelligence must exist)
 
-Wall-clock savings vs sequential:
-  - Steps 3 + 4 run simultaneously  (~3 min saved on LLM batch calls)
-  - Steps 6 + 7 run simultaneously  (~30s saved on BQ writes)
+Note: Step 3 (analyst briefs) moved after Step 5 (conviction) so it can
+filter by conviction tier — every ALERT/FLAG/WATCH filing gets an explanation.
+This costs the parallelism of Steps 3+4 but ensures no tiered filing is missed.
 
 Each step's stdout/stderr is written to logs/pipeline/step_N_TIMESTAMP.log
 so parallel output doesn't interleave on the terminal.
+
+Post-run freshness verification:
+  After all steps succeed, the orchestrator queries BQ table metadata to
+  verify that downstream tables are at least as recent as their upstream
+  dependencies.  If any table is stale the run exits non-zero and prints
+  a suggested --from-step fix.
 
 Usage:
     # Full run
@@ -27,11 +33,20 @@ Usage:
     # Skip steps already done — start from step N
     python scripts/orchestrate.py --from-step 3
 
-    # Run specific steps only (dependencies must already be satisfied in BQ)
+    # Run specific steps only — cascades to downstream dependents by default
     python scripts/orchestrate.py --steps 3,4
+
+    # Run specific steps WITHOUT cascading (expert: you know BQ is consistent)
+    python scripts/orchestrate.py --steps 3,4 --no-cascade
 
     # Preview execution plan without running anything
     python scripts/orchestrate.py --dry-run
+
+    # Only verify BQ freshness (no pipeline execution)
+    python scripts/orchestrate.py --verify
+
+    # Skip freshness check after pipeline run
+    python scripts/orchestrate.py --skip-verify
 """
 
 import argparse
@@ -72,17 +87,17 @@ STEPS = [
         "num":        3,
         "name":       "Generate analyst briefs → anomaly_explanations",
         "script":     "explanations/generate_explanations.py",
-        "args":       ["--min-alert-score", "5"],
-        "depends_on": [2],
-        "note":       "LLM pattern + 3-para brief per filing → BQ anomaly_explanations",
+        "args":       [],
+        "depends_on": [5],                          # needs conviction tiers to filter
+        "note":       "LLM brief per tiered filing (ALERT/FLAG/WATCH) → BQ anomaly_explanations",
     },
     {
         "num":        4,
         "name":       "Score narrative divergence → narrative_divergence",
         "script":     "explanations/score_narrative_divergence.py",
-        "args":       ["--min-alert-score", "5"],
-        "depends_on": [2],                          # parallel with Step 3
-        "note":       "MD&A vs numbers → BQ narrative_divergence",
+        "args":       [],
+        "depends_on": [2],                          # runs after scoring, before conviction
+        "note":       "MD&A vs numbers for all scored filings → BQ narrative_divergence",
     },
     {
         "num":        5,
@@ -97,7 +112,7 @@ STEPS = [
         "name":       "Build master output → filing_intelligence + review pack",
         "script":     "scripts/build_master_output.py",
         "args":       [],
-        "depends_on": [3, 5],                       # parallel with Step 7
+        "depends_on": [3],                          # parallel with Step 7
         "note":       "BQ view + materialised review pack → top_anomaly_review_pack",
     },
     {
@@ -105,7 +120,7 @@ STEPS = [
         "name":       "Build trend table → company_trend",
         "script":     "scripts/build_trend_table.py",
         "args":       [],
-        "depends_on": [3, 5],                       # parallel with Step 6
+        "depends_on": [3],                          # parallel with Step 6
         "note":       "Per-ticker time-series for UI charts → BQ company_trend",
     },
     {
@@ -126,6 +141,29 @@ RUNNING  = "RUNNING"
 DONE     = "DONE   "
 FAILED   = "FAILED "
 SKIPPED  = "SKIPPED"
+
+
+def _cascade_downstream(selected: set[int], steps: list[dict]) -> set[int]:
+    """Expand selected steps to include all transitive downstream dependents.
+
+    If step 2 is selected and step 3 depends on 2, step 3 is added.
+    If step 6 depends on 3, step 6 is added too, etc.
+    """
+    # Build reverse adjacency: parent → children
+    children: dict[int, list[int]] = {s["num"]: [] for s in steps}
+    for s in steps:
+        for dep in s["depends_on"]:
+            children[dep].append(s["num"])
+
+    result = set(selected)
+    frontier = list(selected)
+    while frontier:
+        parent = frontier.pop()
+        for child in children.get(parent, []):
+            if child not in result:
+                result.add(child)
+                frontier.append(child)
+    return result
 
 
 class Orchestrator:
@@ -245,10 +283,11 @@ class Orchestrator:
         # Show dependency diagram
         self._log("Execution order (parallel where shown on same line):")
         self._log("  Phase 1: Step 1 → Step 2")
-        self._log("  Phase 2: Step 3 ∥ Step 4   (parallel)")
+        self._log("  Phase 2: Step 4")
         self._log("  Phase 3: Step 5")
-        self._log("  Phase 4: Step 6 ∥ Step 7   (parallel)")
-        self._log("  Phase 5: Step 8")
+        self._log("  Phase 4: Step 3 (briefs for all tiered filings)")
+        self._log("  Phase 5: Step 6 ∥ Step 7   (parallel)")
+        self._log("  Phase 6: Step 8")
         self._log("")
 
         # Launch all selected steps as threads — each waits on its own deps
@@ -287,6 +326,23 @@ class Orchestrator:
         self._log("\nAll steps completed successfully.")
         return True
 
+    # ── Post-run verification ────────────────────────────────────────────────
+
+    def verify_freshness(self) -> bool:
+        """Run verify_freshness.py and return True if all tables are fresh."""
+        self._log("── Verifying BQ table freshness ──")
+        script = ROOT / "scripts" / "verify_freshness.py"
+        result = subprocess.run(
+            [sys.executable, str(script), "--verbose"],
+            cwd=ROOT,
+        )
+        if result.returncode != 0:
+            self._log("")
+            self._log("FAIL  BQ freshness check failed — downstream tables may be stale.")
+            self._log("      Run the suggested --from-step command above to fix.")
+            return False
+        return True
+
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
@@ -300,23 +356,55 @@ def main() -> None:
     )
     parser.add_argument(
         "--steps", default=None,
-        help="Run only these steps, e.g. --steps 3,4  (BQ deps must already exist)",
+        help="Run these steps + all downstream dependents, e.g. --steps 2",
+    )
+    parser.add_argument(
+        "--no-cascade", action="store_true",
+        help="With --steps: run ONLY the listed steps, skip downstream dependents",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
         help="Print execution plan without running anything",
     )
+    parser.add_argument(
+        "--verify", action="store_true",
+        help="Only run BQ freshness verification (no pipeline execution)",
+    )
+    parser.add_argument(
+        "--skip-verify", action="store_true",
+        help="Skip post-run BQ freshness verification",
+    )
     args = parser.parse_args()
+
+    orchestrator = Orchestrator(STEPS, dry_run=args.dry_run)
+
+    # --verify: only check freshness, don't run pipeline
+    if args.verify:
+        ok = orchestrator.verify_freshness()
+        sys.exit(0 if ok else 1)
 
     only_steps = None
     if args.steps:
         only_steps = [int(s.strip()) for s in args.steps.split(",")]
+        if not args.no_cascade:
+            before = set(only_steps)
+            only_steps = sorted(_cascade_downstream(before, STEPS))
+            added = set(only_steps) - before
+            if added:
+                print(f"[cascade] --steps {','.join(str(s) for s in sorted(before))} "
+                      f"expanded to include downstream: {','.join(str(s) for s in sorted(added))}")
+                print(f"          Use --no-cascade to suppress this.\n")
 
-    orchestrator = Orchestrator(STEPS, dry_run=args.dry_run)
     success = orchestrator.run(
         skip_before=args.from_step,
         only_steps=only_steps,
     )
+
+    # Post-run freshness verification
+    if success and not args.dry_run and not args.skip_verify:
+        if not orchestrator.verify_freshness():
+            sys.exit(1)
+
     sys.exit(0 if success else 1)
 
 

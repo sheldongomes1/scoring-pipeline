@@ -52,7 +52,7 @@ SELECT
   s.calendar_quarter,
   s.gics_sector,
   s.form_type,
-  s.filing_date,
+  SAFE_CAST(s.filing_date AS DATE)   AS filing_date,
   s.filing_url,
 
   -- ── Quantitative anomaly ──────────────────────────────────────────────────

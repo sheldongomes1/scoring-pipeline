@@ -31,9 +31,11 @@ It is a DAG-aware orchestrator that runs independent steps in parallel. The curr
 
 ```
 Phase 1: Step 1 → Step 2           (sequential)
-Phase 2: Step 3 ∥ Step 4           (parallel — both depend only on Step 2)
-Phase 3: Step 5                    (depends on Step 4)
-Phase 4: Step 6 ∥ Step 7           (parallel — both depend on Steps 3 + 5)
+Phase 2: Step 4                    (narrative divergence — depends on Step 2)
+Phase 3: Step 5                    (conviction scores — depends on Step 4)
+Phase 4: Step 3                    (analyst briefs for all tiered filings — depends on Step 5)
+Phase 5: Step 6 ∥ Step 7           (parallel — both depend on Step 3)
+Phase 6: Step 8                    (analyst actions — depends on Step 6)
 ```
 
 **Every time a new element is added to the pipeline — a new script, a new scoring module, a new LLM layer, a new BQ output table — it MUST be either:**
@@ -162,18 +164,21 @@ For each ticker, compute z-scores relative to that ticker's own historical distr
 - `z = (value - median) / (IQR / 1.35)` — the 1.35 factor normalises IQR to approximate std for normal distributions
 - Result: how unusual is this period for *this company* compared to its own history
 
-### Step 4 — Peer-relative z-scores by report_date
+### Step 4 — Peer-relative z-scores by calendar quarter and sector
 
-For each feature, compute z-scores relative to all companies reporting in the same period (`report_date`):
+For each feature, compute z-scores relative to peer companies in the same economic period and industry:
+- Group by `calendar_quarter` (derived from `report_date`: Q1=Jan–Mar, Q2=Apr–Jun, Q3=Jul–Sep, Q4=Oct–Dec) **and** `gics_sector`
+- Companies with different fiscal year-ends but overlapping economic periods are compared as peers (e.g. Jan 31 and Mar 31 quarter-ends both fall in Q1)
+- Fallback: when a sector group has fewer than 5 companies, falls back to calendar-quarter-only (universe-wide) grouping to preserve coverage for small sectors
 - Again use median/IQR (robust)
-- Result: how unusual is this company compared to its peers *at the same point in time*
+- Result: how unusual is this company compared to its sector peers *at the same point in time*
 - This catches sector-wide anomalies that self-history alone would miss
 
 ### Step 5 — Combine the two views
 
 Blend self-history z-scores and peer-relative z-scores:
 - Simple average of the two z-score sets per feature
-- Guardrail: **clip combined z-scores globally** (e.g. ±5) to prevent any single unstable ratio from dominating the model
+- Guardrail: **clip combined z-scores globally** (±8) to prevent any single unstable ratio from dominating the model
 
 ### Step 6 — Compute robust Mahalanobis-style distance
 

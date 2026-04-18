@@ -33,8 +33,20 @@ _COEFF = {
 # Minimum components required to produce a valid M-Score
 MIN_COMPONENTS = 5
 
-# Manipulation probability threshold (Beneish 1999)
-MANIPULATION_THRESHOLD = -2.22
+# Manipulation probability thresholds — sector-aware.
+# Beneish 1999 was fit on industrial-era companies; the −2.22 threshold maps to that
+# world. In growth sectors (IT, Comm Svcs, Health Care) SBC, hypergrowth SGI, and
+# M&A-driven AQI all structurally inflate the M-Score, producing systematic false
+# positives (see analysis/results/beneish_sector_sensitivity.md). The tighter
+# growth-sector threshold requires a stronger composite signal before firing there
+# — an explicit policy instead of an implicit feature-weighting hack.
+MANIPULATION_THRESHOLD = -2.22                # Beneish 1999 — traditional sectors
+MANIPULATION_THRESHOLD_GROWTH = -1.5          # Growth sectors where the 1999 formula misfires
+GROWTH_SECTORS = frozenset({
+    "Information Technology",
+    "Communication Services",
+    "Health Care",
+})
 
 # Cap on index-type components (ratios of ratios) — beyond ±10 is unstable noise
 _INDEX_CAP = 10.0
@@ -214,7 +226,18 @@ def _compute_row(row: pd.Series) -> dict:
     if n_available >= MIN_COMPONENTS:
         m_score = _INTERCEPT + sum(_COEFF[k] * v for k, v in available)
         m_score = round(m_score, 4)
-        manipulation_flag = bool(m_score > MANIPULATION_THRESHOLD)
+        # Sector-aware threshold: growth sectors require a stronger composite
+        # signal (M > −1.5) because the 1999 formula's components structurally
+        # misfire on high-SBC, hypergrowth, M&A-heavy businesses. Traditional
+        # sectors use the Beneish 1999 paper threshold (M > −2.22). Unknown /
+        # missing sector defaults to the traditional (inclusive) threshold.
+        sector = row.get("gics_sector")
+        threshold = (
+            MANIPULATION_THRESHOLD_GROWTH
+            if sector in GROWTH_SECTORS
+            else MANIPULATION_THRESHOLD
+        )
+        manipulation_flag = bool(m_score > threshold)
     else:
         m_score = None
         manipulation_flag = None

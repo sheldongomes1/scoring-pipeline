@@ -200,7 +200,7 @@ URGENCY_RETRY_PROMPT = """\
 You previously generated an analyst brief but omitted the required `urgency_tier` field.
 
 Given the inputs below, return JSON with EXACTLY this shape and nothing else:
-{"urgency_tier": "CRITICAL" | "INVESTIGATE" | "CONTEXTUAL"}
+{{"urgency_tier": "CRITICAL" | "INVESTIGATE" | "CONTEXTUAL"}}
 
 Apply these rules in order, first match wins:
   "CRITICAL"    → conviction_tier = ALERT AND divergence_label = CONTRADICTS

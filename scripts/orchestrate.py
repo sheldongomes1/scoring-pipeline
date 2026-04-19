@@ -3,15 +3,17 @@
 
 Dependency graph:
 
-  Step 1 ──► Step 2 ──► Step 4 ──► Step 5 ──► Step 3 ──► Step 6 ──► Step 8
-                                          └──────────────► Step 7
+  Step 1 ─► Step 2 ─► Step 4 ─► Step 5 ─┬─► Step 3 ─► Step 6 ─► Step 8
+                                         │           └► Step 7
+                                         └─► Step 9 (score_explanation, parallel with Step 3)
 
 Parallel phases:
   Phase 1: Step 1 → Step 2           (sequential — each depends on the previous)
   Phase 2: Step 4                    (narrative divergence — depends on Step 2)
   Phase 3: Step 5                    (conviction scores — depends on Step 4)
-  Phase 4: Step 3 ∥ Step 6 ∥ Step 7  (parallel — all depend on Step 5)
-  Phase 5: Step 8                    (depends on Step 6 — filing_intelligence must exist)
+  Phase 4: Step 3 ∥ Step 9           (parallel — both depend on Step 5)
+  Phase 5: Step 6 ∥ Step 7           (parallel — both depend on Step 3)
+  Phase 6: Step 8                    (depends on Step 6 — filing_intelligence must exist)
 
 Note: Step 3 (analyst briefs) moved after Step 5 (conviction) so it can
 filter by conviction tier — every ALERT/FLAG/WATCH filing gets an explanation.
@@ -130,6 +132,14 @@ STEPS = [
         "args":       [],
         "depends_on": [6],                          # needs filing_intelligence view
         "note":       "CFA-grade next_step / key_question / watch_signal per filing → BQ analyst_actions",
+    },
+    {
+        "num":        9,
+        "name":       "Compute score_explanation (UI transparency)",
+        "script":     "explanations/compute_score_explanation.py",
+        "args":       [],
+        "depends_on": [5],                          # joins scores+conviction+divergence
+        "note":       "Per-filing pillar+feature breakdown for the UI \"Explain the numbers\" modal → BQ score_explanation",
     },
 ]
 
@@ -285,7 +295,7 @@ class Orchestrator:
         self._log("  Phase 1: Step 1 → Step 2")
         self._log("  Phase 2: Step 4")
         self._log("  Phase 3: Step 5")
-        self._log("  Phase 4: Step 3 (briefs for all tiered filings)")
+        self._log("  Phase 4: Step 3 ∥ Step 9   (parallel — briefs + score_explanation)")
         self._log("  Phase 5: Step 6 ∥ Step 7   (parallel)")
         self._log("  Phase 6: Step 8")
         self._log("")

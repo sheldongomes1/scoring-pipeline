@@ -36,6 +36,8 @@ PIPELINE_TABLES = [
     ("company_trend",              "Step 7", ["quarterly_scores_detailed", "conviction_scores",
                                               "anomaly_explanations", "narrative_divergence"]),
     ("analyst_actions",            "Step 8", ["top_anomaly_review_pack"]),
+    ("score_explanation",          "Step 9", ["quarterly_scores_detailed", "conviction_scores",
+                                              "narrative_divergence"]),
 ]
 
 # Staleness tolerance — BQ write timestamps can differ by a few seconds

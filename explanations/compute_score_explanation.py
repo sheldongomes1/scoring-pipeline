@@ -146,6 +146,7 @@ def build_schema() -> list[bigquery.SchemaField]:
             bigquery.SchemaField("mda_tone",             "STRING",  mode="NULLABLE"),
             bigquery.SchemaField("anomaly_acknowledged", "BOOLEAN", mode="NULLABLE"),
             bigquery.SchemaField("cited_passage",        "STRING",  mode="NULLABLE"),
+            bigquery.SchemaField("rationale",            "STRING",  mode="NULLABLE"),
             bigquery.SchemaField("score_transform_note", "STRING",  mode="NULLABLE"),
         ]),
 
@@ -188,7 +189,7 @@ def load_joined(client: bigquery.Client,
             c.pillar_anomaly, c.pillar_earnings, c.pillar_transparency,
 
             n.divergence_label, n.confidence_score, n.mda_tone,
-            n.anomaly_acknowledged, n.cited_passage
+            n.anomaly_acknowledged, n.cited_passage, n.rationale
         FROM `{SCORES_T}` s
         LEFT JOIN `{CONVICTION}` c
             USING (ticker, calendar_quarter)
@@ -302,6 +303,7 @@ def build_row(r: pd.Series, computed_at_iso: str) -> dict:
             "mda_tone":             _s(r.get("mda_tone")),
             "anomaly_acknowledged": _b(r.get("anomaly_acknowledged")),
             "cited_passage":        _s(r.get("cited_passage")),
+            "rationale":            _s(r.get("rationale")),
             "score_transform_note": build_narrative_transform_note(r),
         }
     else:

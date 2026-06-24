@@ -1,5 +1,22 @@
 # CLAUDE.md — QQQ Anomaly Scoring Pipeline
 
+## Active workstream (read this first on session open)
+
+We are building the **Agentic Investigator** — an agentic AI loop that turns the
+`analyst_actions` "what would escalate / go check X" suggestions into an
+investigation the system runs itself, surfaced as a NotebookLM-style
+disambiguation graph the user can steer. This work is run in **Socratic build
+(tutor) mode** — learn the *why*, defend every architectural choice before code.
+
+On session open, READ these to resume exactly where we left off:
+- `docs/agentic-investigation/roadmap.md` — **CURRENT POSITION** block at the top
+- `docs/agentic-investigation/mission.md` — the goals and the fused idea
+- `docs/agentic-investigation/decisions.md` — ADR log (open checkpoints = PENDING)
+- `docs/agentic-investigation/lessons.md` — portfolio fuel
+
+Maintenance rule: append to `decisions.md`/`lessons.md` the moment a decision or
+lesson surfaces; update the roadmap CURRENT POSITION block before any session ends.
+
 ## Permissions
 
 - **Read:** Pre-approved for all files in this directory and subdirectories. No confirmation needed before reading any file.

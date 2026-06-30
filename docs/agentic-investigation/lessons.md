@@ -30,3 +30,26 @@ Format:
   reaches the data itself, with a disambiguation graph letting the user steer.
 - Post angle: "If your AI feature ends every answer with 'now go check X
   yourself,' you probably stopped one tool call short of an agent."
+
+## 2026-06-30 — Grounding is a precondition, not a co-equal axis
+
+- Situation: Designing the judge that decides when an agentic investigation stops.
+  The judge grades each output on three axes — Confirm/refute (C), Grounded (G),
+  Open-questions (O) — giving an 8-state truth table to route on (loop / rerun /
+  stop).
+- What we assumed: that C, G, and O are three independent, co-equal signals you
+  read off and combine. We filled the truth table treating an ungrounded output's
+  "confirm/refute" verdict and "open questions" list as usable signal.
+- Lesson: grounding is a **gate**, not a peer. If the output isn't traceable to
+  source data (G=No), then C and O were produced by the *same* untrustworthy
+  reasoning that failed the grounding check — so routing on them means routing on
+  signals you just declared unreliable. Worse, "loop to gather more" on an
+  ungrounded output burns the entire budget stacking garbage on garbage. The fix
+  collapses 8 rows to one rule: if not grounded → repair (own small cap) then
+  abandon; only *after* grounding passes do C and O decide loop-vs-stop.
+- Fix / rework: reordered the policy so grounding short-circuits first. Surfaced a
+  bonus third terminal state in the process — "inconclusive" (clean evidence,
+  genuinely ambiguous) is distinct from "failed" and is a *useful* answer.
+- Post angle: "Your LLM judge's 'is this correct?' score is worthless if the
+  'is this grounded?' score failed — check provenance first, or you're scoring
+  hallucinations."

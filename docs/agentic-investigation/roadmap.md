@@ -2,13 +2,21 @@
 
 > **CURRENT POSITION (update this block every session before closing):**
 >
-> - **Date:** 2026-06-24
-> - **Phase:** 0 — Design & framing (Socratic).
-> - **Right now:** Awaiting Sheldon's answer to the **ADR-1 checkpoint** — define
->   what makes the loop agentic vs. a workflow, in three parts:
->   (1) action space / real tools, (2) termination condition + budget,
->   (3) the one property that separates this from `orchestrate.py`.
-> - **Next after that:** critique the answer, log ADR-1, move to Phase 1.
+> - **Date:** 2026-06-30
+> - **Phase:** 1 — Harness / action space (entering).
+> - **Just landed:** **ADR-1 accepted.** The line = ownership of the next edge
+>   (path-variance conditioned on observations; fan-out is NOT it). Termination =
+>   cross-family judge over a 3-axis rubric (C/G/O) with grounding as a
+>   *precondition*, collapsing to: not-grounded→rerun(repair_cap); resolved→loop-or-stop;
+>   grounded-unresolved→loop-or-stop(inconclusive). Three terminal states:
+>   resolved / inconclusive / failed. Budget = two independent caps
+>   (investigation_cap=5, repair_cap=2). `persistence_test` = deterministic
+>   confirm/refute check against BQ. See ADR-1 in `decisions.md`.
+> - **Right now:** Phase 1 — define the tool harness. The golden-source allowlist
+>   from ADR-1 (BQ `period_features`, GCS narrative, FMP fundamentals, scoring
+>   outputs) is the action space. Next checkpoint: typed tool I/O — what each tool
+>   takes/returns, isolation, testability.
+> - **Next after that:** Phase 2 — single-branch agent loop end-to-end.
 
 ---
 

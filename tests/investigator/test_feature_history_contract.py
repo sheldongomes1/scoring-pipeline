@@ -19,7 +19,12 @@ from qqq_scoring.investigator.tools.contracts import (  # noqa: E402
     FeatureStatus,
     Provenance,
 )
-from qqq_scoring.investigator.tools.feature_history import feature_history  # noqa: E402
+from qqq_scoring.investigator.tools.feature_history import (  # noqa: E402
+    feature_history,
+    tool_definition,
+)
+
+FEATURE_KEYS = ["ocf_to_net_income", "net_margin", "debt_to_assets"]
 
 
 def _provenance(resolved: date = date(2025, 9, 30)) -> Provenance:
@@ -92,6 +97,34 @@ def test_stub_data_path_not_wired():
     except NotImplementedError:
         return
     raise AssertionError("feature_history data path should raise NotImplementedError until wired")
+
+
+def test_tool_definition_is_strict_ready():
+    """strict=True requires additionalProperties:false and every field required —
+    without both, the API rejects the tool. Assert the invariants hold."""
+    td = tool_definition(FEATURE_KEYS)
+    assert td["name"] == "feature_history"
+    assert td["strict"] is True
+    schema = td["input_schema"]
+    assert schema["additionalProperties"] is False
+    # strict demands every property is in `required`
+    assert set(schema["required"]) == set(schema["properties"].keys())
+
+
+def test_tool_definition_only_exposes_inputs_not_provenance():
+    """The model-facing schema must NOT leak the output/provenance envelope —
+    the agent chooses inputs; it never 'chooses' a source table or retrieved_at."""
+    props = tool_definition(FEATURE_KEYS)["input_schema"]["properties"]
+    assert set(props) == {"ticker", "report_date", "period_offset", "features"}
+    for leaked in ("status", "value", "source", "resolved_report_date", "query"):
+        assert leaked not in props
+
+
+def test_tool_definition_features_enum_tracks_feature_keys():
+    """The features enum is built from the passed-in keys, so it stays in sync
+    with output/feature_keys.json rather than drifting as a hardcoded copy."""
+    td = tool_definition(FEATURE_KEYS)
+    assert td["input_schema"]["properties"]["features"]["items"]["enum"] == FEATURE_KEYS
 
 
 def _run() -> None:

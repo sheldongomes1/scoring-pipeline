@@ -2,21 +2,26 @@
 
 > **CURRENT POSITION (update this block every session before closing):**
 >
-> - **Date:** 2026-06-30
-> - **Phase:** 1 — Harness / action space (entering).
-> - **Just landed:** **ADR-1 accepted.** The line = ownership of the next edge
->   (path-variance conditioned on observations; fan-out is NOT it). Termination =
->   cross-family judge over a 3-axis rubric (C/G/O) with grounding as a
->   *precondition*, collapsing to: not-grounded→rerun(repair_cap); resolved→loop-or-stop;
->   grounded-unresolved→loop-or-stop(inconclusive). Three terminal states:
->   resolved / inconclusive / failed. Budget = two independent caps
->   (investigation_cap=5, repair_cap=2). `persistence_test` = deterministic
->   confirm/refute check against BQ. See ADR-1 in `decisions.md`.
-> - **Right now:** Phase 1 — define the tool harness. The golden-source allowlist
->   from ADR-1 (BQ `period_features`, GCS narrative, FMP fundamentals, scoring
->   outputs) is the action space. Next checkpoint: typed tool I/O — what each tool
->   takes/returns, isolation, testability.
-> - **Next after that:** Phase 2 — single-branch agent loop end-to-end.
+> - **Date:** 2026-07-01
+> - **Phase:** 1 — Harness / action space (in progress; tool #1 complete).
+> - **Landed so far:** ADR-1 (agentic line + termination + budget), ADR-2
+>   (tool-result contract: status enum, provenance envelope, deterministic-vs-model
+>   grounding by claim type), ADR-3 (tool-binding standard: `strict:true`,
+>   inputs-only/provenance-never-exposed, enums from canonical lists, prescriptive
+>   description, generator = `claude-opus-4-8`).
+> - **Tool #1 (`feature_history`) is complete end-to-end as a contract:** typed
+>   input, 3-state output (found/feature_missing/period_not_filed), provenance,
+>   `__post_init__` invariant, AND the Claude `tool_definition()`. Lives in
+>   `src/qqq_scoring/investigator/tools/`. 8 contract tests pass (run:
+>   `python3 tests/investigator/test_feature_history_contract.py`). BigQuery body
+>   still stubbed (raises NotImplementedError) — deliberate.
+> - **Two seams deferred to Phase 2:** (a) string→date parse adapter for
+>   `report_date`; (b) `{tool_name → callable}` dispatch registry.
+> - **Right now — pick one:** stub tool #2 (GCS narrative — the RAG/unstructured
+>   one, where provenance = retrieved passages + model-mode grounding, to feel the
+>   structured-vs-unstructured split), OR jump to Phase 2 (single-branch agent loop
+>   end-to-end with just `feature_history` to prove the tool-use loop works).
+> - **Next after that:** Phase 2 single-branch loop → Phase 3 disambiguation graph.
 
 ---
 

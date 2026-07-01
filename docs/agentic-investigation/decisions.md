@@ -173,4 +173,82 @@ quarter recovered" can be checked against the period the value truly belongs to.
   re-runnable `query`; unstructured results expose cited passages.
 - Next checkpoint (deferred): binding this Python contract to Claude's tool-use
   JSON-schema format — the model-facing schema is not the same artifact as the
-  Python dataclass, and it's Anthropic-specific.
+  Python dataclass, and it's Anthropic-specific. → resolved in ADR-3.
+
+---
+
+## ADR-3: Tool-binding standard — Python contract → Claude tool-use schema
+
+**Date:** 2026-07-01
+**Status:** Accepted
+
+**Context:** The action space (ADR-2) is defined as typed Python contracts, but
+the agent picks tools at run-time through Claude's tool-use API — which consumes a
+JSON-Schema tool definition, not a Python dataclass. The model-facing schema is a
+*separate artifact* from the internal contract, and it's Anthropic-specific. We
+need one binding standard all four tools follow so the model sees a consistent,
+safe, minimal action space. Verified against the current Anthropic tool-use spec
+(via the claude-api skill) rather than written from memory.
+
+**Decision — every tool exposes a `tool_definition(...)` returning a Claude
+tool-use dict, following four rules:**
+
+1. **Inputs only — provenance is never exposed to the model.** The tool
+   definition's `input_schema` describes *only what the agent chooses* (for
+   `feature_history`: `ticker`, `report_date`, `period_offset`, `features`). The
+   output envelope from ADR-2 (`status`, `value`, `source`, `resolved_report_date`,
+   `query`, `retrieved_at`) is **absent** — it flows back separately as a
+   `tool_result`, and is the judge's concern, not the model's. A test enforces the
+   provenance fields cannot leak into the schema. This is the clean seam that lets
+   the judge move to a different provider later without touching generator tools.
+
+2. **`strict: true`.** Extends ADR-2 principle 2 ("make illegal states
+   unrepresentable") from output to *input*: with `additionalProperties: false`
+   and every property in `required`, the API guarantees `tool_use.input` validates
+   exactly — a hallucinated/malformed argument cannot reach the BigQuery query.
+   Cost: all fields must be required + `additionalProperties: false` (wanted
+   anyway).
+
+3. **Enums sourced from canonical lists, not hardcoded.** `tool_definition()`
+   takes `feature_keys` as an argument and builds the `features` enum from it, so
+   the model-facing allowlist stays in sync with `output/feature_keys.json` — one
+   source of truth, not a drifting copy.
+
+4. **Prescriptive `description` (the trigger, not just the "what").** The
+   description states *when* to call the tool ("call this when you need to check
+   whether a feature persisted/recovered… e.g. to resolve a persistence_test"),
+   because Opus 4.8 reaches for tools conservatively — a description that only
+   states what the tool does under-triggers.
+
+**Model IDs:** generator = `claude-opus-4-8` (current default Opus tier). Judge
+model deferred to the termination phase. Honest caveat recorded for that ADR:
+ADR-1 wanted a *different-family* judge to decorrelate blind spots, but within
+Anthropic every model shares a family — a true cross-family judge requires a
+second provider. Do not pretend Sonnet-judging-Opus is cross-family.
+
+**The tool-use loop this binds (executed in Phase 2, not yet built):**
+```
+send tools + messages → Claude returns tool_use{id, name, input}
+  → parse input → run the Python callable → send tool_result{tool_use_id, content}
+  → Claude reads it and chooses its next edge (ADR-1 path-variance)
+```
+
+**Alternatives considered:**
+- *Expose the full contract (incl. provenance) to the model* — rejected. The model
+  neither chooses nor should reason about `retrieved_at`/`query`; exposing them
+  bloats the schema and blurs the generator/judge seam.
+- *`strict: false`* — rejected. Lets malformed arguments through to a financial
+  query; strict is nearly free given we want all-required anyway.
+- *Hardcode the `features` enum* — rejected. Drifts from `feature_keys.json`.
+- *Generate the schema from the Python dataclass automatically (Pydantic)* —
+  deferred, not rejected. No Pydantic dependency yet; the hand-written
+  `tool_definition()` is explicit and dependency-free. Revisit if tool count grows.
+
+**Consequences:**
+- Two seams remain for Phase 2: (a) a parse adapter (`report_date` arrives as a
+  string, the callable takes a `date`); (b) a `{tool_name → callable}` dispatch
+  registry so the loop routes any tool by name.
+- All four tools implement `tool_definition(...)` the same way; the narrative tool
+  differs only in its input shape, not in these four rules.
+- The generator/judge provider split is now enforceable in code (the leak test),
+  not just intended.

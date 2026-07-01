@@ -93,3 +93,84 @@ specified in Phase 1, which ADR-1 hands the allowlist.
   render `inconclusive` as a first-class, useful branch outcome.
 - Deterministic `persistence_test` checks tie the agent back into the existing
   pipeline rather than inventing a new judge.
+
+---
+
+## ADR-2: Tool-result contract standard (all Phase 1 tools)
+
+**Date:** 2026-07-01
+**Status:** Accepted
+
+**Context:** Phase 1 defines the agent's action space as typed, isolated, testable
+tools over the golden sources (BQ `period_features`, GCS narrative, FMP
+fundamentals, scoring outputs). Before stubbing four tools we need one contract
+standard they all obey — otherwise each tool invents its own shape and the judge
+has to special-case every result. Derived by designing the first tool
+(`feature_history`) end-to-end in a Socratic checkpoint; the principles that fell
+out are reusable across all four.
+
+**Decision — every tool result obeys three principles:**
+
+1. **Complete but non-contradictory inputs.** Give a tool everything it needs and
+   nothing it can contradict itself with. Concretely: no two input fields may
+   encode the same fact (we dropped a `direction` field because a *signed*
+   `period_offset` already encodes it — `offset=+1, direction="prior"` is an
+   undefined state, and undefined states breed bugs).
+
+2. **Make illegal states unrepresentable.** Model mutually-exclusive outcomes as a
+   **status enum**, not a bag of boolean/nullable flags. N booleans encode 2^N
+   combinations but the real world has only a few legal ones; every illegal cell
+   is a latent bug. `feature_history` returns
+   `status ∈ {found, feature_missing, period_not_filed}` — this protects ADR-1's
+   three terminal states (a "not filed yet" period must not be mistaken for a
+   `null`/`0` value, or the agent manufactures a false `refuted`/`failed` instead
+   of a correct `inconclusive`).
+
+3. **Every result carries provenance, verified by claim type.** A bare value is
+   ungroundable — the judge (ADR-1) can't check "grounded in golden source only"
+   without a thread to pull. So each result attaches provenance: the fields that
+   let a skeptic independently re-reach the data (test: *if you delete the field,
+   is the value still checkable?*). Verification is matched to the claim type:
+   - **Structured data (BQ tables)** → provenance is a *re-runnable query* +
+     source/row identity; grounding is checked **deterministically** (re-query,
+     compare with `==`). No model call — using an LLM to verify `0.87 == 0.87` is
+     wasteful and *weaker* than `==`.
+   - **Unstructured data (GCS narrative prose)** → provenance is the *retrieved
+     passage(s)* + source locator; grounding is checked by the **judge model**
+     (semantic support), because there's no exact-match check for prose.
+
+**Reference contract (`feature_history`, first tool):**
+```
+feature_history(ticker, report_date, period_offset: int, features: list[str])
+  -> list[FeatureResult]
+FeatureResult:
+  feature, status{found|feature_missing|period_not_filed}, value|null,
+  source, resolved_report_date, accession_number, query, retrieved_at
+```
+`resolved_report_date` is the provenance field that guards the calendar-math trap
+— it exposes which quarter the tool *actually* landed on, so a claim of "next
+quarter recovered" can be checked against the period the value truly belongs to.
+
+**Alternatives considered:**
+- *Per-tool ad hoc return shapes* — rejected. Forces the judge to special-case
+  every tool; no uniform grounding check.
+- *Boolean/nullable flags for outcomes* (`period_exists: bool, value: number|null`)
+  — rejected in favour of a status enum. It works for 3 states but leaves an
+  illegal quadrant (`exists=false, value=non-null`) representable; enums scale
+  linearly and make the illegal state unspellable.
+- *Hand the judge the whole reference set to re-scan ("RAG the table")* — rejected
+  for structured data. Expensive, and it makes grounding itself fuzzy/gameable
+  (the model can misread the table). Deterministic re-query is cheaper and
+  unbeatable. NOTE: the RAG-style "give the judge the retrieved material" approach
+  is *correct* for the unstructured narrative tool — structured vs unstructured
+  provenance are deliberately different.
+
+**Consequences:**
+- All four Phase 1 tools implement the same `status`-enum + provenance envelope;
+  the narrative tool differs only in provenance *content* (passages, not a query)
+  and verification *mode* (model, not `==`).
+- The judge gets a uniform grounding interface: structured results expose a
+  re-runnable `query`; unstructured results expose cited passages.
+- Next checkpoint (deferred): binding this Python contract to Claude's tool-use
+  JSON-schema format — the model-facing schema is not the same artifact as the
+  Python dataclass, and it's Anthropic-specific.

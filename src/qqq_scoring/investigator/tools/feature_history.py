@@ -7,6 +7,7 @@ BigQuery body is not wired yet.
 """
 from __future__ import annotations
 
+import json
 from datetime import date
 
 from .contracts import FeatureResult
@@ -88,3 +89,55 @@ def tool_definition(feature_keys: list[str]) -> dict:
             "additionalProperties": False,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase-2 adapters — the two seams ADR-3 deferred.
+#
+# The model speaks JSON (strings, numbers, arrays); the Python callable speaks
+# typed args (a `date`) and returns dataclasses. These two functions are the
+# translation layer at the boundary. They are tool-SPECIFIC (they know
+# feature_history's shape), so they live with the tool — the registry that
+# routes calls stays generic and knows nothing about dates or FeatureResult.
+# ---------------------------------------------------------------------------
+
+
+def parse_model_input(model_input: dict) -> dict:
+    """Seam (a): the model's JSON input -> kwargs for the `feature_history` callable.
+
+    The model sends `report_date` as an ISO string (that's all JSON has); the
+    callable's signature wants a real `date`. Parsing lives HERE, once, at the
+    edge — so no downstream code, and never the model, does date arithmetic
+    (a reliability leak). `strict:true` on the tool definition already guarantees
+    the four keys are present and well-typed, so this parse is safe, not defensive.
+    """
+    return {
+        "ticker": model_input["ticker"],
+        "report_date": date.fromisoformat(model_input["report_date"]),
+        "period_offset": model_input["period_offset"],
+        "features": model_input["features"],
+    }
+
+
+def to_model_content(results: list[FeatureResult]) -> str:
+    """Serialize results into the tool_result content the GENERATOR sees (ADR-5).
+
+    Generator-facing subset only: `feature`, `status`, `value`, and
+    `resolved_report_date` (the model must know WHICH quarter it landed on to
+    pick its next edge). The receipts — `query`, `retrieved_at`,
+    `accession_number`, `source` — are withheld here and retained separately for
+    the judge. Withholding the query is what stops the model from parroting a
+    receipt it never used and *looking* grounded: the only way its answer can
+    match the paper trail is if it actually used the real value.
+    """
+    return json.dumps(
+        [
+            {
+                "feature": r.feature,
+                "status": r.status.value,
+                "value": r.value,
+                "resolved_report_date": r.provenance.resolved_report_date.isoformat(),
+            }
+            for r in results
+        ]
+    )

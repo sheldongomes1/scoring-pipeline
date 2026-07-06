@@ -79,3 +79,27 @@ Format:
   The loop was perfect. My test spy was aliased to the mutable state it was spying
   on — it kept overwriting its own evidence. A list is a handle, not a value;
   snapshot before you log."
+
+## 2026-07-05 — Proving 'agentic' with a diff, not a demo
+
+- Situation: The loop closes and the model calls tools — but "it called a tool"
+  doesn't prove *agentic*. A workflow calls tools too; the engineer just chose the
+  calls at author-time. I needed the rigorous version of ADR-1's claim
+  (path-variance conditioned on observations), not a feel-good single run.
+- What we assumed / the trap: it's tempting to declare victory at the first live
+  tool call. That's the workflow-in-disguise trap — a fixed DAG also emits tool
+  calls; the data differs but the *step sequence* is identical run to run.
+- Lesson: you prove an agent with a DIFF, not a demo. Run the SAME code on two
+  inputs engineered to warrant different investigations, and show the tool-call
+  *sequence itself* diverges as a function of what the model observed. If the two
+  traces are identical, you built a workflow no matter how fancy the wrapper.
+  Ours diverged sharply: on the recovered ticker (AAPL) the model ran a
+  single-feature time-series sweep (offsets 0,−1,+1,+2,+3); on the still-broken
+  ticker (WBD) it batched *multiple corroborating features* per call to explain
+  *why* — different features, offsets, and batching, from one prompt.
+- Fix / rework: `scripts/investigate_variance.py` runs both cases, reconstructs
+  each tool-call signature from the transcript, and diffs them. The assertion is
+  on the *paths*, not the answers.
+- Post angle: "How do you prove your AI is an 'agent' and not a workflow with
+  extra steps? Run the same code on two different inputs. If the tool-call
+  sequence doesn't change, you built a workflow. Prove it with a diff, not a demo."

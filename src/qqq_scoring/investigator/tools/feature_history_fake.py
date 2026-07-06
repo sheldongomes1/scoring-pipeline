@@ -33,20 +33,40 @@ _QUARTER_ENDS = [
 ]
 # Everything filed up to and including this date exists; later quarters haven't
 # been filed yet — that's the PERIOD_NOT_FILED case, distinct from a null value.
-_FILED_THROUGH = date(2025, 9, 30)
+_FILED_THROUGH = date(2025, 12, 31)
 
 # The fixture table: (ticker, resolved_quarter) -> {feature: value}.
-# debt_to_assets is deliberately absent at 2025-09-30 to exercise FEATURE_MISSING
-# (the period WAS filed, but that one ratio couldn't be computed).
+# Two tickers with DELIBERATELY DIFFERENT stories, so the same loop code produces
+# path-variance (ADR-1) — the model's tool-call sequence should diverge as a
+# function of what it observes, not of the code:
+#   AAPL  — cash conversion DIPS at the anchor then RECOVERS (0.55 -> 0.95). One
+#           +1 lookup answers it; a diligent agent stops early.
+#   WBD   — cash conversion dips and STAYS broken (0.50 -> 0.52 -> 0.49) while
+#           accruals climb (0.09 -> 0.11 -> 0.13). Seeing no recovery at +1, a
+#           diligent agent has reason to reach further — a later quarter, or the
+#           corroborating accrual_ratio — to explain WHY. More edges, driven by
+#           the observation, not by us.
+# debt_to_assets is absent at AAPL 2025-09-30 to exercise FEATURE_MISSING (the
+# period WAS filed, but that one ratio couldn't be computed).
 _DATA: dict[tuple[str, date], dict[str, float]] = {
     ("AAPL", date(2025, 3, 31)): {"ocf_to_net_income": 1.10, "net_margin": 0.24, "debt_to_assets": 0.31},
     ("AAPL", date(2025, 6, 30)): {"ocf_to_net_income": 0.55, "net_margin": 0.19, "debt_to_assets": 0.33},
     ("AAPL", date(2025, 9, 30)): {"ocf_to_net_income": 0.95, "net_margin": 0.23},  # debt_to_assets missing
+    ("AAPL", date(2025, 12, 31)): {"ocf_to_net_income": 0.98, "net_margin": 0.24, "debt_to_assets": 0.32},
+    ("WBD", date(2025, 3, 31)): {"ocf_to_net_income": 0.72, "net_margin": 0.08, "accrual_ratio": 0.02},
+    ("WBD", date(2025, 6, 30)): {"ocf_to_net_income": 0.50, "net_margin": 0.05, "accrual_ratio": 0.09},
+    ("WBD", date(2025, 9, 30)): {"ocf_to_net_income": 0.52, "net_margin": 0.04, "accrual_ratio": 0.11},
+    ("WBD", date(2025, 12, 31)): {"ocf_to_net_income": 0.49, "net_margin": 0.03, "accrual_ratio": 0.13},
 }
 _ACCESSION = {
-    date(2025, 3, 31): "0000320193-25-000041",
-    date(2025, 6, 30): "0000320193-25-000057",
-    date(2025, 9, 30): "0000320193-25-000073",
+    ("AAPL", date(2025, 3, 31)): "0000320193-25-000041",
+    ("AAPL", date(2025, 6, 30)): "0000320193-25-000057",
+    ("AAPL", date(2025, 9, 30)): "0000320193-25-000073",
+    ("AAPL", date(2025, 12, 31)): "0000320193-25-000089",
+    ("WBD", date(2025, 3, 31)): "0001437107-25-000012",
+    ("WBD", date(2025, 6, 30)): "0001437107-25-000024",
+    ("WBD", date(2025, 9, 30)): "0001437107-25-000036",
+    ("WBD", date(2025, 12, 31)): "0001437107-25-000048",
 }
 
 
@@ -90,7 +110,7 @@ def feature_history_fake(
             resolved_report_date=resolved,
             query=f"SELECT {feature} FROM period_features WHERE ticker='{ticker}' AND report_date='{resolved}'",
             retrieved_at=retrieved_at,
-            accession_number=_ACCESSION.get(resolved),
+            accession_number=_ACCESSION.get((ticker, resolved)),
         )
         if feature in row:
             results.append(FeatureResult(feature, FeatureStatus.FOUND, row[feature], prov))

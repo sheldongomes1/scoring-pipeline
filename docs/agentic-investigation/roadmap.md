@@ -25,14 +25,21 @@
 >     `python3 tests/investigator/test_loop_closes.py`). Scripted fake client, no
 >     key. Proves closure, both termination paths, the parse seam, and the ADR-5
 >     provenance non-leak.
-> - **What the harness does NOT yet prove:** real path-variance (ADR-1). The
->   scripted client can't *choose* — only a live model can. That's the next slice.
-> - **Right now — the live run:** build `scripts/investigate_demo.py`: swap the
->   ScriptedClient for the real Anthropic SDK, hit `claude-opus-4-8` once on the
->   AAPL persistence_test, and observe the model actually pick the tool. Same loop,
->   real client. This is the "works for one use case" proof.
-> - **Next after that:** the ADR-1 judge (grounding gate → resolved/inconclusive/
->   failed) → then tool #2 (GCS narrative) → Phase 3 disambiguation graph.
+> - **Live proofs both landed.** `scripts/investigate_demo.py` — model chose the
+>   tool, grounded verdict (single case). `scripts/investigate_variance.py` — the
+>   RIGOROUS ADR-1 proof: same code, two filings (AAPL recovers / WBD stays
+>   broken), tool-call *sequences diverged* (AAPL = single-feature time-series
+>   sweep; WBD = multi-feature corroboration sweep). Path-variance conditioned on
+>   observations is demonstrated, not just asserted. Second fixture ticker (WBD)
+>   added to `feature_history_fake.py`; `_FILED_THROUGH` moved to 2025-12-31.
+> - **Right now — the JUDGE (ADR-1 termination).** This is the next checkpoint,
+>   NOT auto-build: it's the second model integration + the grounding gate
+>   (deterministic re-query for structured tools) + repair loop. Open questions to
+>   resolve before code: judge I/O contract; per-iteration vs at-termination;
+>   how the deterministic grounding re-query reads against the (currently fake)
+>   backend; judge model choice (Sonnet — same-family caveat from ADR-3 stands).
+> - **Next after that:** tool #2 (GCS narrative — unstructured provenance) →
+>   Phase 3 disambiguation graph.
 
 ---
 

@@ -194,7 +194,7 @@ def test_period_not_filed_flows_through_as_null_not_zero():
     the model must not read a missing future quarter as a 0/refutation."""
     outcome = _registry().dispatch(
         "feature_history",
-        {"ticker": "AAPL", "report_date": "2025-06-30", "period_offset": 2, "features": ["ocf_to_net_income"]},
+        {"ticker": "AAPL", "report_date": "2025-06-30", "period_offset": 3, "features": ["ocf_to_net_income"]},
     )
     assert outcome.raw_results[0].status is FeatureStatus.PERIOD_NOT_FILED
     assert '"value": null' in outcome.model_content

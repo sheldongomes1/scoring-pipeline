@@ -24,19 +24,27 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from .judge import Confirm, JudgeVerdict
 from .registry import ToolRegistry
 
 DEFAULT_MODEL = "claude-opus-4-8"  # generator tier (ADR-3)
 DEFAULT_MAX_TOKENS = 2048
 DEFAULT_INVESTIGATION_CAP = 5      # ADR-1 budget: bounds evidence-gathering loops
+DEFAULT_REPAIR_CAP = 2             # ADR-1 budget: bounds grounding reruns, SEPARATELY
 
 
 class TerminalReason(str, Enum):
-    """Why the loop stopped. Two thin reasons for this slice; the judge's
-    resolved/inconclusive/failed verdicts (ADR-1) layer on in a later slice."""
+    """Why the loop stopped.
 
-    MODEL_STOPPED = "model_stopped"                 # model chose to end (stop_reason != tool_use)
-    CAP_REACHED = "investigation_cap_reached"       # hit the ADR-1 budget without stopping
+    `MODEL_STOPPED` is the no-judge path (ADR-4): the model's `end_turn` is
+    terminal. With a judge attached (ADR-6), `end_turn` is only a *proposal* and
+    the judge assigns one of the ADR-1 terminal states instead."""
+
+    MODEL_STOPPED = "model_stopped"                 # no judge: model chose to end
+    RESOLVED = "resolved"                           # judge: grounded, resolved, no open Qs
+    INCONCLUSIVE = "inconclusive"                   # judge: grounded, clean, genuinely ambiguous
+    ABANDONED = "abandoned"                         # judge: grounding failed past repair_cap
+    CAP_REACHED = "investigation_cap_reached"       # turn ceiling hit before a terminal verdict
 
 
 @dataclass
@@ -53,6 +61,7 @@ class TerminalResult:
     tool_calls: int
     messages: list[dict] = field(default_factory=list)
     evidence: list[Any] = field(default_factory=list)
+    verdict: JudgeVerdict | None = None   # the judge's final grade (None on the no-judge path)
 
 
 def _text_from(content: Any) -> str:
@@ -64,28 +73,60 @@ def _text_from(content: Any) -> str:
     return "\n".join(parts).strip()
 
 
+def _repair_prompt(verdict: JudgeVerdict) -> str:
+    items = ", ".join(verdict.ungrounded_items) or "one or more figures"
+    return (
+        f"Your proposed conclusion was NOT accepted: {items} could not be "
+        "independently verified against the source. Re-investigate and base your "
+        "answer only on values the tools actually returned — do not state a figure "
+        "you have not fetched."
+    )
+
+
+def _continue_prompt(verdict: JudgeVerdict) -> str:
+    return (
+        f"Not done yet — open questions remain: {verdict.reasoning} Make additional "
+        "tool calls to resolve them, then propose your conclusion again."
+    )
+
+
 def run_investigation(
     client: Any,
     registry: ToolRegistry,
     task: str,
     *,
+    judge: Any = None,          # ADR-6: injected termination policy; None = ADR-4 behaviour
+    predicate: str | None = None,  # the exact question the judge grades (defaults to task)
     system: str = "",
     model: str = DEFAULT_MODEL,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     investigation_cap: int = DEFAULT_INVESTIGATION_CAP,
+    repair_cap: int = DEFAULT_REPAIR_CAP,
 ) -> TerminalResult:
     """Run one investigation to termination and return the outcome.
 
     `client` is anything exposing Anthropic's `messages.create(...)` — the real
-    SDK or a scripted fake. That injection is the whole reason the loop is testable
-    without a live model.
+    SDK or a scripted fake. `judge` (optional) owns termination when present: the
+    model's `end_turn` becomes a *proposal* the judge adjudicates (ADR-6). With no
+    judge, `end_turn` is terminal (ADR-4) and the reason is `MODEL_STOPPED`.
     """
     messages: list[dict] = [{"role": "user", "content": task}]
     tools = registry.tool_definitions()
     evidence: list[Any] = []
     tool_calls = 0
+    repairs = 0
+    turns = 0
+    last_answer = ""
+    # ADR-1's two caps are INDEPENDENT, not additive: investigation_cap bounds
+    # total model turns (the backstop against any runaway, incl. propose<->continue
+    # with no gathering); repair_cap is a SEPARATE sub-ceiling that trips ABANDONED
+    # on its own count (`repairs`), so a grounding-repair explosion can't hide
+    # behind the investigation budget. Summing them would hand repair headroom to a
+    # no-judge run that can never repair.
+    ceiling = investigation_cap
 
-    for iteration in range(1, investigation_cap + 1):
+    while turns < ceiling:
+        turns += 1
         resp = client.messages.create(
             model=model,
             max_tokens=max_tokens,
@@ -98,44 +139,64 @@ def run_investigation(
         # prior turn (its tool_use) is in the transcript it sees.
         messages.append({"role": "assistant", "content": resp.content})
 
-        if resp.stop_reason != "tool_use":
-            # The model chose to stop: it has its answer, no further edge to pick.
+        if resp.stop_reason == "tool_use":
+            # The model picked one or more tools — run each, collect a tool_result.
+            # A turn may contain several tool_use blocks (parallel tool calls); the
+            # API requires a tool_result for EVERY one before the next turn.
+            tool_result_blocks = []
+            for block in resp.content:
+                if getattr(block, "type", None) != "tool_use":
+                    continue
+                tool_calls += 1
+                outcome = registry.dispatch(block.name, block.input)
+                evidence.extend(outcome.raw_results)   # full envelope -> judge (ADR-5)
+                tool_result_blocks.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": outcome.model_content,  # generator-facing subset only
+                    }
+                )
+            messages.append({"role": "user", "content": tool_result_blocks})
+            continue
+
+        # --- the model PROPOSED a conclusion (stopped calling tools) -----------
+        last_answer = _text_from(resp.content)
+
+        if judge is None:
+            # ADR-4 path: no judge, the proposal is terminal.
             return TerminalResult(
-                reason=TerminalReason.MODEL_STOPPED,
-                iterations=iteration,
-                final_text=_text_from(resp.content),
-                tool_calls=tool_calls,
-                messages=messages,
-                evidence=evidence,
+                TerminalReason.MODEL_STOPPED, turns, last_answer, tool_calls, messages, evidence
             )
 
-        # The model picked one or more tools — run each, collect a tool_result.
-        # A turn may contain several tool_use blocks (parallel tool calls); the
-        # API requires a tool_result for EVERY one before the next turn.
-        tool_result_blocks = []
-        for block in resp.content:
-            if getattr(block, "type", None) != "tool_use":
-                continue
-            tool_calls += 1
-            outcome = registry.dispatch(block.name, block.input)
-            evidence.extend(outcome.raw_results)   # full envelope -> judge (ADR-5)
-            tool_result_blocks.append(
-                {
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": outcome.model_content,  # generator-facing subset only
-                }
-            )
-        messages.append({"role": "user", "content": tool_result_blocks})
+        # ADR-6: the judge adjudicates the proposal. Grounding (G) gates first.
+        verdict: JudgeVerdict = judge.evaluate(predicate or task, last_answer, evidence)
 
-    # Budget exhausted before the model stopped — a real terminal state (ADR-1),
-    # not an error. The last assistant turn's text is the best available answer.
-    last_text = _text_from(messages[-2]["content"]) if len(messages) >= 2 else ""
+        if not verdict.grounded:
+            repairs += 1
+            if repairs > repair_cap:
+                return TerminalResult(
+                    TerminalReason.ABANDONED, turns, last_answer, tool_calls, messages, evidence, verdict
+                )
+            messages.append({"role": "user", "content": _repair_prompt(verdict)})
+            continue
+
+        if verdict.confirm is Confirm.RESOLVED and not verdict.open_questions:
+            return TerminalResult(
+                TerminalReason.RESOLVED, turns, last_answer, tool_calls, messages, evidence, verdict
+            )
+
+        if verdict.open_questions:
+            # Grounded but incomplete — send it back to gather more (ADR-1 loop).
+            messages.append({"role": "user", "content": _continue_prompt(verdict)})
+            continue
+
+        # Grounded, clean, but genuinely ambiguous — a USEFUL terminal state (ADR-1).
+        return TerminalResult(
+            TerminalReason.INCONCLUSIVE, turns, last_answer, tool_calls, messages, evidence, verdict
+        )
+
+    # Turn ceiling hit before any terminal verdict — a real terminal state, not an error.
     return TerminalResult(
-        reason=TerminalReason.CAP_REACHED,
-        iterations=investigation_cap,
-        final_text=last_text,
-        tool_calls=tool_calls,
-        messages=messages,
-        evidence=evidence,
+        TerminalReason.CAP_REACHED, turns, last_answer, tool_calls, messages, evidence
     )

@@ -32,14 +32,27 @@
 >   sweep; WBD = multi-feature corroboration sweep). Path-variance conditioned on
 >   observations is demonstrated, not just asserted. Second fixture ticker (WBD)
 >   added to `feature_history_fake.py`; `_FILED_THROUGH` moved to 2025-12-31.
-> - **Right now — the JUDGE (ADR-1 termination).** This is the next checkpoint,
->   NOT auto-build: it's the second model integration + the grounding gate
->   (deterministic re-query for structured tools) + repair loop. Open questions to
->   resolve before code: judge I/O contract; per-iteration vs at-termination;
->   how the deterministic grounding re-query reads against the (currently fake)
->   backend; judge model choice (Sonnet — same-family caveat from ADR-3 stands).
-> - **Next after that:** tool #2 (GCS narrative — unstructured provenance) →
->   Phase 3 disambiguation graph.
+> - **JUDGE landed & proven live (ADR-6).** `src/qqq_scoring/investigator/judge.py`
+>   — `Judge` owns termination; `end_turn` is a proposal it adjudicates. G is
+>   deterministic re-fetch + `==` (never trusts in-process evidence); C/O use a
+>   strict `submit_judgment` tool on `claude-sonnet-5`; G gates first. Loop
+>   rewritten: `judge`/`predicate`/`repair_cap` params, TerminalReason gains
+>   RESOLVED/INCONCLUSIVE/ABANDONED (MODEL_STOPPED preserved for judge=None).
+>   Caps are independent (investigation_cap = total-turn ceiling; repair_cap = its
+>   own ABANDONED sub-ceiling — do NOT sum them). Tests: 24 green across
+>   contract(8)/loop(7)/judge(9). Live proof: `scripts/investigate_judged.py WBD`
+>   → Opus proposed "no recovery", Sonnet grounded all 9 evidence items, returned
+>   RESOLVED, correctly treated feature_missing as a limitation not an open question.
+> - **Right now — TOOL #2 (GCS narrative), the unstructured tool.** This is the
+>   next checkpoint, NOT auto-build. It's the first test of ADR-2's unstructured
+>   half (100% theory so far). Open decisions before code: (a) does the
+>   `FeatureResult`/`Provenance` contract generalize to prose, or do we need a
+>   sibling result type? (b) retrieval mechanism — real embedding RAG vs
+>   section-addressed lookup vs keyword; do we need a vector store yet? (c) the
+>   judge's G must become polymorphic — deterministic == for structured,
+>   model-mode semantic support for narrative; how does it dispatch by evidence
+>   type? (d) narrative input shape (section name? free-text query? both?).
+> - **Next after that:** Phase 3 disambiguation graph (fan-out N hypotheses).
 
 ---
 

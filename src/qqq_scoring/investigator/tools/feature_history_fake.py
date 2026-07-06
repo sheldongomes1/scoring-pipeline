@@ -96,6 +96,7 @@ def feature_history_fake(
         if resolved is None or resolved > _FILED_THROUGH:
             prov = Provenance(
                 source=_SOURCE,
+                ticker=ticker,
                 resolved_report_date=resolved or report_date,
                 query=f"SELECT {feature} FROM period_features WHERE ticker='{ticker}' AND report_date='{resolved}'",
                 retrieved_at=retrieved_at,
@@ -107,6 +108,7 @@ def feature_history_fake(
         row = _DATA.get((ticker, resolved), {})
         prov = Provenance(
             source=_SOURCE,
+            ticker=ticker,
             resolved_report_date=resolved,
             query=f"SELECT {feature} FROM period_features WHERE ticker='{ticker}' AND report_date='{resolved}'",
             retrieved_at=retrieved_at,

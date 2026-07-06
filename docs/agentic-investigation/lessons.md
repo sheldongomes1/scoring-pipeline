@@ -103,3 +103,48 @@ Format:
 - Post angle: "How do you prove your AI is an 'agent' and not a workflow with
   extra steps? Run the same code on two different inputs. If the tool-call
   sequence doesn't change, you built a workflow. Prove it with a diff, not a demo."
+
+## 2026-07-05 — 'Two independent caps' means independent, not two numbers you add
+
+- Situation: Building the ADR-1 judge, which owns loop termination. ADR-1 specified
+  TWO budget caps — investigation_cap (bounds evidence-gathering) and repair_cap
+  (bounds grounding reruns) — and stressed they must be *independent* so a repair
+  explosion can't hide behind the investigation budget.
+- What broke / what we assumed: I implemented "independent" as
+  `ceiling = investigation_cap + repair_cap` — one summed turn limit. A unit test
+  caught it: a no-judge run with investigation_cap=3 ran 5 turns. The bug: a run
+  that can *never repair* (no judge attached) was still handed the repair headroom.
+  Summing two budgets doesn't make them independent — it makes one bigger budget.
+- Lesson: independence between two limits is a routing property, not an arithmetic
+  one. investigation_cap must bound TOTAL turns (the real backstop); repair_cap is
+  a SEPARATE sub-ceiling that trips its own terminal state (ABANDONED) on its own
+  counter, regardless of remaining total budget. That's what stops a repair loop
+  hiding behind the investigation budget — the thing ADR-1 actually asked for. If
+  you add two caps together, neither is independent; you just renamed their sum.
+- Fix / rework: `ceiling = investigation_cap`; `repairs` counted separately and
+  compared to `repair_cap` for the ABANDONED route. 24/24 tests green.
+- Post angle: "Spec said 'two independent budget caps.' I added them together.
+  Independence between limits is about *which one trips and what happens* — not
+  arithmetic. Add two caps and you don't have two caps, you have one bigger one."
+
+## 2026-07-05 — The judge that owns 'stop' catches a distinction a flag can't
+
+- Situation: First live run of the two-model loop — Opus generator proposes, Sonnet
+  judge owns the stop decision (grounds each figure by re-fetch, then grades). Ran
+  it on WBD, whose cash conversion stayed broken and whose ocf_to_assets was
+  feature_missing for every quarter.
+- What we assumed / the risk: a judge deciding "are there open questions?" would
+  see missing data and demand it — looping forever on data that doesn't exist.
+- Lesson: giving the judge the 3-state enum (found / feature_missing /
+  period_not_filed) rather than a null lets it reason about WHY something is absent.
+  Sonnet correctly ruled the missing ocf_to_assets a "noted limitation, not an
+  open answerable question central to the predicate" and returned RESOLVED. A
+  bare-null result would have looked identical to a fetchable-but-missing value,
+  and the judge would have looped. The enum you designed three ADRs ago is what
+  makes the termination logic correct under a second model.
+- Fix / rework: none — it worked first try because the contract carried the
+  distinction. This is the ADR-2 status-enum decision cashing out downstream.
+- Post angle: "My AI investigator's judge saw missing data and had to decide: is
+  this a dead end or a to-do? It got it right — because three design decisions ago
+  I refused to represent 'missing' as null. Contracts you set early decide whether
+  your agent loops forever."

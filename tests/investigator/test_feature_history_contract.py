@@ -30,6 +30,7 @@ FEATURE_KEYS = ["ocf_to_net_income", "net_margin", "debt_to_assets"]
 def _provenance(resolved: date = date(2025, 9, 30)) -> Provenance:
     return Provenance(
         source="qqq_finance.period_features",
+        ticker="AAPL",
         resolved_report_date=resolved,
         query="SELECT ocf_to_net_income FROM period_features WHERE ...",
         retrieved_at=datetime(2026, 7, 1, 12, 0, 0),

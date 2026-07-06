@@ -367,3 +367,87 @@ to a different provider without the generator's tools touching provenance.
   `ToolBinding`; provenance retention is uniform in the loop (`evidence.extend`).
 - Enforced by `test_model_never_sees_provenance_receipts` +
   `test_full_provenance_retained_for_judge`.
+
+---
+
+## ADR-6: The judge — termination authority, cadence, and grounding mechanism
+
+**Date:** 2026-07-05
+**Status:** Accepted
+
+**Context:** ADR-1 designed the judge's rubric (3 axes C/G/O, grounding as a
+precondition, three terminal states, two budget caps) but wrote its policy as a
+*controller* (`open_questions ? loop : stop`). The Phase-2 loop we actually built
+lets the *model* own termination (it stops on `end_turn`). Those two were never
+reconciled: with both able to say "keep going," they can oscillate or duplicate
+control. Building the judge forces the reconciliation, its run cadence, and what
+"grounded" concretely checks against a backend that is currently a fake.
+
+**Decision — three parts:**
+
+**1. The judge owns termination; `end_turn` becomes a proposal.** Once a judge is
+attached, the model's `end_turn` is no longer terminal — it is a *proposal* ("I
+think I'm done"). The loop hands the proposed answer to the judge, which
+adjudicates: accept → stop, or reject → re-inject guidance and continue. One
+authority, no fight: the model may propose stopping as often as it likes; only the
+judge's verdict stops the loop. (The judge is *injected* — `judge=None` preserves
+the ADR-4 harness behaviour: stop on `end_turn`, terminal state `MODEL_STOPPED`.
+The judge is a pluggable termination policy, like the client and the data backend.)
+
+**2. Cadence — per proposed conclusion, not per iteration.** The judge fires only
+when the model *proposes a conclusion* (stops emitting `tool_use`), NOT on every
+loop iteration. Rationale: most iterations end in a `tool_use` (the model is
+mid-gathering), where there is no candidate answer to grade — the C and O axes
+presuppose a claim, so grading a tool-gathering step is incoherent, not merely
+expensive. Judge calls ≈ number of times the model thinks it's done (1–2),
+bounded by the caps. (Rejected: a cheap per-iteration guard rail — real value,
+but that is a *supervisor*, a separate component with a different job; folding it
+into the termination judge is scope creep. Scoped out, not adopted.)
+
+**3. Grounding = deterministic re-provenance, never trust in-process state.** G is
+**code, not a model call** (ADR-2: don't use an LLM to verify `0.87 == 0.87`).
+For every retained evidence item, the judge *independently re-fetches from the
+golden source* using the item's provenance (ticker + `resolved_report_date` +
+feature) and compares `(status, value)` with `==`. It does NOT trust the
+`evidence` dict handed forward — "we are not giving it our memory state." Against
+the fake backend today the re-fetch hits the fake; when BigQuery lands the same
+re-fetch hits BQ — mechanism identical, backend swaps (the injected
+`reverify` callable). Only C (does the evidence resolve the predicate?) and O
+(open questions remain?) use the judge *model*, and only *after* G passes.
+
+**Policy (ADR-1, collapsed), evaluated per proposed conclusion:**
+```
+not grounded          → repair (own repair_cap) then ABANDONED
+grounded + resolved + no open_q   → STOP(RESOLVED)
+grounded + open_q (either C)      → re-inject, continue (investigation ceiling)
+grounded + unresolved + no open_q → STOP(INCONCLUSIVE)
+```
+
+**Judge model:** `claude-sonnet-5` (cheaper tier than the Opus generator; different
+tier, partial blind-spot decorrelation). The ADR-3 honest caveat stands: same
+Anthropic family ≠ true cross-family; a real cross-family judge needs a second
+provider. Not pretended.
+
+**Alternatives considered:**
+- *Model owns termination (judge is advisory)* — rejected. Reintroduces the
+  fight and lets an ungrounded/incomplete answer end the investigation.
+- *Judge every iteration* — rejected (part 2): incoherent on tool-gathering steps.
+- *Grounding by re-running the `query` SQL string* — deferred. Works only against
+  BQ; our backend is the fake. The re-dispatch-by-identity path (ticker +
+  resolved date + feature) is backend-agnostic and works today. `query` stays as
+  the human/BQ-facing handle.
+- *Model-graded grounding* — rejected. ADR-1/ADR-2: structured grounding is
+  deterministic and un-gameable; a model grading its sibling's grounding
+  re-introduces correlated blind spots.
+
+**Consequences:**
+- `Provenance` gains a `ticker` field — needed for backend-agnostic deterministic
+  re-fetch (parsing the SQL `query` string would be worse). Envelope change ripples
+  to the fake backend and the contract-test fixture.
+- `run_investigation` gains `judge`, `predicate`, and `repair_cap` params; the
+  `TerminalReason` enum gains `RESOLVED`, `INCONCLUSIVE`, `ABANDONED` alongside the
+  no-judge `MODEL_STOPPED` and the ceiling `CAP_REACHED`.
+- New `judge.py`: `Judge` (deterministic G via injected `reverify` + model C/O via
+  a strict `submit_judgment` tool) and `JudgeVerdict`. The judge is the first
+  consumer of the receipts ADR-5 withheld from the generator.
+- Two model integrations now live (generator Opus + judge Sonnet).

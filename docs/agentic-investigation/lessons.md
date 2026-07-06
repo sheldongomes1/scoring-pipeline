@@ -53,3 +53,29 @@ Format:
 - Post angle: "Your LLM judge's 'is this correct?' score is worthless if the
   'is this grounded?' score failed — check provenance first, or you're scoring
   hallucinations."
+
+## 2026-07-05 — The loop was fine; my test was lying to me (Python aliasing)
+
+- Situation: Building the Phase-2 agent loop. To test it without a live model I
+  wrote a scripted fake Anthropic client that records the args of every
+  `messages.create()` call, so I could assert "on the 2nd call, the model was
+  handed a tool_result that did NOT contain the provenance receipts."
+- What broke / what we assumed: the assertion blew up with `'_TextBlock' object
+  is not subscriptable`. I assumed the loop had mangled the message it sent. It
+  hadn't. The agent loop reuses ONE `messages` list and mutates it in place
+  (append assistant turn, append tool_result, loop). My fake stored
+  `kwargs["messages"]` by reference — so after the run, every recorded call
+  pointed at the *same* final list. Call #1's "snapshot" was actually showing
+  call #4's state. The loop was correct; the observer was aliased to the thing it
+  was observing.
+- Lesson: a list in Python is a handle, not a value. Anywhere you log mutable
+  state for *later* inspection — audit logs, event sourcing, test spies, undo
+  stacks — you must snapshot at capture time (`list(x)` / `copy.deepcopy`), or the
+  log silently reports the present as if it were the past. The bug hid as a loop
+  bug for a minute because the symptom surfaced downstream of the real cause.
+- Fix / rework: snapshot the messages list in the fake client's `_next`
+  (`{**kwargs, "messages": list(kwargs["messages"])}`). 7/7 tests green.
+- Post angle: "My agent-loop test failed and I spent a minute blaming the loop.
+  The loop was perfect. My test spy was aliased to the mutable state it was spying
+  on — it kept overwriting its own evidence. A list is a handle, not a value;
+  snapshot before you log."

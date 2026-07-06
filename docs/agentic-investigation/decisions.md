@@ -252,3 +252,118 @@ send tools + messages → Claude returns tool_use{id, name, input}
   differs only in its input shape, not in these four rules.
 - The generator/judge provider split is now enforceable in code (the leak test),
   not just intended.
+
+---
+
+## ADR-4: Build sequencing — loop-first (walking skeleton) over breadth-first
+
+**Date:** 2026-07-05
+**Status:** Accepted
+
+**Context:** Phase 1 left one tool (`feature_history`) complete as a contract but
+with a stubbed body. Two forward paths: (a) stub tool #2 (GCS narrative, the
+unstructured one) to widen the action space, or (b) jump to Phase 2 and wire the
+single-branch agent loop end-to-end with the one tool we have. Only one core
+mechanism — the tool-use loop — is currently unproven, and nothing downstream
+works until it does.
+
+**Decision — two coupled sub-decisions:**
+
+**1. Loop-first, not breadth-first.** Build the end-to-end loop with the single
+existing tool before adding a second tool. A second tool that conforms to a
+contract we have never run against a live loop is *speculative generality* — if
+the loop run reveals the contract is wrong, breadth-first means reworking two
+tools instead of one. A foundation crack found *after* the loop works is cheap to
+patch (add a tool that fits the proven loop); a loop that never closes makes every
+tool worthless. Walking-skeleton dominates when the core mechanism is unproven.
+
+**2. Fake backends, because the property is a function of the round-trip.** The
+loop-closing property is a function of the tool-call round-trip (`tool_use →
+dispatch → tool_result → next edge`), NOT of where the data came from or which
+model answered. So we inject two fakes: an in-memory `feature_history_fake` (no
+BigQuery) and a scripted fake Anthropic client (no key). This buys two distinct
+proofs from one harness: the scripted client proves the *harness* closes
+(deterministic, testable), and a later live `claude-opus-4-8` run proves the
+*agentic property* (real path-variance, ADR-1). Swapping either fake for the real
+thing touches zero lines of loop logic — that is the seam working.
+
+**Scope of this slice (what is deliberately deferred):** termination is thin —
+stop on the model's `end_turn` OR the `investigation_cap` budget (ADR-1). The
+ADR-1 judge (grounding/resolved/inconclusive) is NOT built here: the judge grades
+output *quality*, it does not *close* the loop, so it is a later slice. Real
+BigQuery and tool #2 are deferred, not cancelled.
+
+**Alternatives considered:**
+- *Breadth-first (stub tool #2 next)* — rejected. Its one real merit is that the
+  narrative tool is the only thing exercising ADR-2's unstructured-provenance half
+  (currently 100% theory). But that crack is cheap to patch post-loop; an unclosed
+  loop is not. Steelman logged, call stands.
+- *Real BigQuery in the loop slice* — rejected. Tangles a live dependency,
+  credentials, latency, and a query to debug together with the loop logic under
+  test. The fake isolates the variable.
+- *Real model call in the unit test* — rejected for the *harness* proof
+  (non-deterministic, costs money, needs a key). Retained as a separate demo for
+  the *agentic-property* proof.
+
+**Consequences:**
+- Phase 2 lands as five artifacts: `loop.py`, `registry.py`,
+  `tools/feature_history_fake.py`, the two adapters added to `feature_history.py`
+  (`parse_model_input`, `to_model_content`), and `tests/investigator/test_loop_closes.py`
+  (7 tests). The two ADR-3 seams (parse adapter, dispatch registry) are now built.
+- The next slice is the live demo (`scripts/investigate_demo.py`) — same loop,
+  real client — to prove path-variance, then the judge, then tool #2.
+- Registry is generic (`ToolBinding` carries all tool-specific functions), so
+  adding tool #2 = adding one binding; loop and registry stay untouched.
+
+---
+
+## ADR-5: Generator-facing vs judge-facing result visibility
+
+**Date:** 2026-07-05
+**Status:** Accepted
+
+**Context:** ADR-3 rule 1 established that provenance is never exposed to the model
+*on input* (the tool definition describes only what the agent chooses). When the
+loop runs, the tool's *output* comes back as a `tool_result` — and the result
+envelope (ADR-2) carries both reasoning-relevant fields and provenance receipts.
+We must decide what subset of that envelope the model (generator) sees, versus
+what is retained for the judge.
+
+**Decision — give the generator the answer, give the judge the receipts.** The
+`tool_result` handed back to the model carries only what it needs to pick its next
+edge: `feature`, `status`, `value`, and `resolved_report_date` (it must know
+*which* quarter it landed on). The receipts — `query`, `retrieved_at`,
+`accession_number`, `source` — are withheld from the model and retained in
+`TerminalResult.evidence` for the judge. This extends ADR-3 rule 1 from input to
+output: provenance is the judge's concern end-to-end, never the generator's.
+
+Note the split is *not* "provenance vs not." `resolved_report_date` is technically
+a provenance field but is also reasoning-relevant (the model needs to know it
+asked for +1 and landed on 2025-09-30), so it crosses to the generator. The real
+axis is: **what does the generator need to choose its next edge** vs **what does
+the judge need to verify grounding.**
+
+**Why it matters (the failure it prevents):** if the model can see the receipt
+(`query: "SELECT ocf_to_net_income ..."`), it can parrot the receipt into its
+answer and *look* grounded without the value being real — turning the judge's
+grounding check into theater (this is exactly the `lessons.md` warning: "check
+provenance first or you're scoring hallucinations"). By withholding the receipt,
+the only way the answer can match the paper trail is if the model genuinely used
+the real value. It also keeps the provider seam clean (ADR-3): the judge can move
+to a different provider without the generator's tools touching provenance.
+
+**Alternatives considered:**
+- *Send the whole envelope back to the model* — rejected. Lets the model launder
+  receipts into its answer, defeating the grounding check, and bloats context with
+  fields it never reasons on.
+- *Withhold `resolved_report_date` too (strict "no provenance to model")* —
+  rejected. The model then can't tell which quarter a value belongs to and would
+  do date arithmetic itself (a reliability leak the tool exists to prevent).
+
+**Consequences:**
+- `registry.dispatch` returns a `DispatchOutcome(model_content, raw_results)` — the
+  two halves kept structurally separate, not merely by convention.
+- Every tool supplies its own `serialize` (generator-facing) function via its
+  `ToolBinding`; provenance retention is uniform in the loop (`evidence.extend`).
+- Enforced by `test_model_never_sees_provenance_receipts` +
+  `test_full_provenance_retained_for_judge`.

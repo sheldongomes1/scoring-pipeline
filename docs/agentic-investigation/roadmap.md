@@ -2,26 +2,37 @@
 
 > **CURRENT POSITION (update this block every session before closing):**
 >
-> - **Date:** 2026-07-01
-> - **Phase:** 1 — Harness / action space (in progress; tool #1 complete).
+> - **Date:** 2026-07-05
+> - **Phase:** 2 — Single-branch agent loop (in progress; harness proven, live run next).
 > - **Landed so far:** ADR-1 (agentic line + termination + budget), ADR-2
->   (tool-result contract: status enum, provenance envelope, deterministic-vs-model
->   grounding by claim type), ADR-3 (tool-binding standard: `strict:true`,
->   inputs-only/provenance-never-exposed, enums from canonical lists, prescriptive
->   description, generator = `claude-opus-4-8`).
-> - **Tool #1 (`feature_history`) is complete end-to-end as a contract:** typed
->   input, 3-state output (found/feature_missing/period_not_filed), provenance,
->   `__post_init__` invariant, AND the Claude `tool_definition()`. Lives in
->   `src/qqq_scoring/investigator/tools/`. 8 contract tests pass (run:
->   `python3 tests/investigator/test_feature_history_contract.py`). BigQuery body
->   still stubbed (raises NotImplementedError) — deliberate.
-> - **Two seams deferred to Phase 2:** (a) string→date parse adapter for
->   `report_date`; (b) `{tool_name → callable}` dispatch registry.
-> - **Right now — pick one:** stub tool #2 (GCS narrative — the RAG/unstructured
->   one, where provenance = retrieved passages + model-mode grounding, to feel the
->   structured-vs-unstructured split), OR jump to Phase 2 (single-branch agent loop
->   end-to-end with just `feature_history` to prove the tool-use loop works).
-> - **Next after that:** Phase 2 single-branch loop → Phase 3 disambiguation graph.
+>   (tool-result contract), ADR-3 (tool-binding standard), ADR-4 (build
+>   sequencing: loop-first over breadth-first, fake backends because the
+>   loop-closing property is a function of the round-trip), ADR-5 (generator sees
+>   the answer, judge gets the receipts — result-visibility split).
+> - **Phase-2 harness is complete and proven.** The tool-use loop CLOSES: five
+>   artifacts landed —
+>   - `src/qqq_scoring/investigator/loop.py` — `run_investigation(client, ...)`,
+>     client-agnostic, sync, single branch. Terminates on `end_turn` OR
+>     `investigation_cap` (thin; judge deferred).
+>   - `src/qqq_scoring/investigator/registry.py` — `ToolBinding` + `ToolRegistry`
+>     (the `{name → callable}` dispatch seam; generic).
+>   - `src/qqq_scoring/investigator/tools/feature_history_fake.py` — in-memory data
+>     backend (AAPL story: OCF/NI dips to 0.55 at 2025-06-30, recovers to 0.95 at
+>     +1 quarter; includes a PERIOD_NOT_FILED and a FEATURE_MISSING).
+>   - `feature_history.py` — added the two ADR-3 seams: `parse_model_input`
+>     (str→date) and `to_model_content` (generator-facing serializer).
+>   - `tests/investigator/test_loop_closes.py` — 7 tests, all green (run:
+>     `python3 tests/investigator/test_loop_closes.py`). Scripted fake client, no
+>     key. Proves closure, both termination paths, the parse seam, and the ADR-5
+>     provenance non-leak.
+> - **What the harness does NOT yet prove:** real path-variance (ADR-1). The
+>   scripted client can't *choose* — only a live model can. That's the next slice.
+> - **Right now — the live run:** build `scripts/investigate_demo.py`: swap the
+>   ScriptedClient for the real Anthropic SDK, hit `claude-opus-4-8` once on the
+>   AAPL persistence_test, and observe the model actually pick the tool. Same loop,
+>   real client. This is the "works for one use case" proof.
+> - **Next after that:** the ADR-1 judge (grounding gate → resolved/inconclusive/
+>   failed) → then tool #2 (GCS narrative) → Phase 3 disambiguation graph.
 
 ---
 

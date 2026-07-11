@@ -537,3 +537,67 @@ seam as fake-backend-now / real-BQ-later. RAG is built WHEN the need arrives
   and serialization are already per-`ToolBinding` (ADR-4/5).
 - ADR-2's "envelope generalizes" is refined to "generalizes as an interface,
   forks as concrete types."
+
+---
+
+## ADR-8: The disambiguation graph — propose-then-steer fan-out, and what a branch is
+
+**Date:** 2026-07-11
+**Status:** Accepted
+
+**Context:** Phase 3 turns a single flagged filing into a *graph* of competing
+hypotheses the user can steer (the mission's NotebookLM disambiguation surface).
+The flag is ambiguous — a collapse in OCF/NI could be benign working-capital
+timing, revenue-quality rot, structural margin pressure, or a one-off. The
+single-branch loop (Phase 2) silently commits to one of these, burying the choice
+in how it phrases its first tool call — exactly the "hidden assumption in the
+prompt" the disambiguation thesis (Isaac Flath) says to expose. Two questions had
+to be settled before code: the *shape* of the fan-out, and the *data model* of a
+branch.
+
+**Decision — two parts:**
+
+**1. Propose-then-steer, not investigate-all.** The fan-out is a *steering surface*,
+not a parallelism optimization. On a flag, a CHEAP model call NAMES N hypotheses
+(one line each + a plausibility rationale) — no tool calls, no investigation
+budget. The graph is rendered; the human points at the branch worth pursuing; only
+THEN does the full `run_investigation` loop run, on the chosen branch alone, going
+deep. Rejected: *investigate-all* (run the loop on all N in parallel, then present
+findings). It doesn't just cost N× — it *defeats the purpose*: presenting N finished
+mini-investigations is a fait accompli, not a steering moment. It spends budget to
+*remove* the human's chance to correct the assumption, which is the one thing the
+graph exists to create. (A)'s only real merit — that bare hypotheses leave the human
+steering blind — is answered by the `rationale` field below, not by investigating.
+
+**2. A branch carries the QUESTION, never the method.** A `Branch` is:
+`id`, `hypothesis` (the one-line causal story), `rationale` (why it's plausible —
+the field that lets the human steer with sight, not blind), **`predicate`** (the
+steering wire), `status`, and — once run — its `TerminalResult`. The load-bearing
+field is `predicate`: the reframed question the branch hands to
+`run_investigation` (e.g. H2 → "Is the depressed cash conversion driven by
+deteriorating revenue quality — receivables outrunning revenue, aggressive
+recognition?"). Picking a branch swaps the generic predicate for the branch's, and
+the agent — at RUN-TIME — decides that answering it means fetching receivables,
+accrual ratio, DSO, etc. **The branch must NOT carry the tools/metrics to fetch:**
+hardcoding the method turns the branch into a fixed recipe and destroys the
+run-time tool-choice (ADR-1 path-variance) that Phase 2 exists to guarantee. Name
+the question; the agent still chooses the tools. (Rejected: a branch carrying an
+explicit evidence/tool checklist — it collapses the focused investigation back into
+a workflow.)
+
+**Consequences:**
+- New `graph.py`: `Branch` + `InvestigationGraph` data models and
+  `propose_branches(client, flag, n)` — a strict-tool model call emitting the N
+  hypotheses. This is the fan-out; it is a PRODUCT layer over the loop (mission:
+  graph = facade, loop = load-bearing wall), consistent with ADR-1 keeping fan-out
+  out of the agentic-loop definition.
+- A chosen branch runs the EXISTING loop unchanged — its `predicate` is the only
+  new input. The loop needs no Phase-3 changes.
+- Branch `status` reuses the loop's terminal states
+  (resolved/inconclusive/abandoned) once investigated; `proposed` is the new
+  pre-investigation state.
+- Sets up Phase 4: an investigated branch's `TerminalResult` may spawn child
+  branches (the graph grows); depth/breadth limits deferred to that phase.
+- Interactivity (human picks a branch) is request-time — the first non-batch piece
+  (mission), so orchestrate.py wiring is deferred; the batch pre-compute of level-1
+  proposals vs. a `redink-ui` service is an open Phase-5 question.

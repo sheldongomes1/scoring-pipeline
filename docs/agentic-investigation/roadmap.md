@@ -61,11 +61,30 @@
 > - **Phase 2 is functionally COMPLETE:** agentic loop + judge + one structured
 >   tool + one unstructured tool, all proven live, 38 tests. Real BQ/GCS bodies
 >   still stubbed (deliberate — fakes prove the mechanism).
-> - **Right now — pick the next phase:** (a) Phase 3 disambiguation graph (fan-out
->   N hypotheses per flag, render NotebookLM-style, user steers); (b) wire a real
->   backend (feature_history → BigQuery) to make one tool production-real; (c)
->   tool #3 (FMP fundamentals) to prove the 3rd-tool-zero-judge-change claim.
->   Recommend (a) — it's the product's headline feature and the loop is ready for it.
+> - **PHASE 3 (disambiguation graph) landed & proven live (ADR-8).** Propose-then-
+>   steer fan-out: a cheap `propose_branches` call names N competing hypotheses (no
+>   investigation budget); the human steers into one; `run_branch` runs the EXISTING
+>   loop with the branch's `predicate` as the only new input. New `graph.py`
+>   (`Flag`, `Branch`, `InvestigationGraph`, `propose_branches`, `run_branch`,
+>   `BranchStatus`). The load-bearing field is `predicate` (the question), NEVER a
+>   metric list (that would collapse the branch into a workflow, killing ADR-1
+>   agency). 42 tests green (contract 8 / loop 7 / judge 9 / narrative 14 / graph 4).
+>   Live: `scripts/investigate_fanout.py h2` — WBD flag fanned into 4
+>   analyst-grade hypotheses; steering into working-capital ran a focused deep-dive;
+>   the grounding judge forced the agent to RETRACT an unsupported inference and
+>   return an honest "cannot confirm with available tools" instead of hallucinating.
+> - **Product signal from the live run:** the toolset has no balance-sheet line
+>   items (receivables/payables/content assets), which capped the working-capital
+>   and revenue-recognition branches. The investigation surfaced its own next tool.
+> - **Open calibration question (note for later):** the judge returned RESOLVED for
+>   a branch whose answer was "hypothesis rejected / not fully testable" — defensible
+>   (the branch question got a grounded answer with a clear lean) but the
+>   resolved/inconclusive boundary is worth tuning as more branches run.
+> - **Right now — pick the next phase:** (a) Phase 4 — a resolved branch spawns
+>   CHILD branches (the graph grows; depth/breadth limits); (b) tool #3 = FMP/BQ
+>   balance-sheet line items (the gap the live run exposed — highest product value);
+>   (c) Phase 5 — wire into orchestrate.py / redink-ui (batch level-1 proposals vs
+>   interactive service). Recommend (b): the investigation itself asked for it.
 
 ---
 

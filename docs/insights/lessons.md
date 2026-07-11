@@ -181,3 +181,47 @@ the lesson body. Chronological order.
   It would've crashed on the first real run — I upgraded the grounding step and
   forgot its twin, the grader, still assumed one type. Make one path polymorphic,
   audit all of them. Test at the integration level or the gap hides."
+
+## 2026-07-11 — The grounding gate made the agent retract a claim, live
+
+- Situation: First live run of the full disambiguation graph — a WBD flag fanned
+  out into four competing hypotheses; we steered into the working-capital one and
+  ran the focused deep-dive (both tools + grounding judge).
+- What happened: the investigator initially inferred that the ABSENT MD&A sections
+  "would have contained" working-capital detail — an unsupported claim about
+  evidence it never had. The judge's semantic grounding head pushed back. The agent
+  re-examined, wrote "I should not have framed the absent sections as places that
+  'would have contained' detail — that was an unsupported inference. I retract it,"
+  and downgraded its verdict to "cannot confirm with available tools" rather than
+  invent receivables data it never fetched.
+- Lesson: a grounding gate isn't just a pass/fail stamp on a finished answer — when
+  it rejects, it forces the generator to re-ground and walk back overreach. The
+  visible payoff of provenance-first design (ADR-2/ADR-5/ADR-6/ADR-7) is an agent
+  that says "I can't prove this with the tools I have" instead of hallucinating the
+  gap. The honest null is the feature, and it only exists because grounding is a
+  precondition the model can't talk its way past.
+- Bonus product signal: the agent couldn't fully test the working-capital or
+  revenue-recognition hypotheses because the toolset exposes no balance-sheet
+  line items (receivables/payables). The investigation surfaced its own next tool.
+- Post angle: "I watched my AI investigator try to confirm a hypothesis, get called
+  out by its own grounding judge, and retract the claim — then say 'I can't prove
+  this with the tools I have' instead of inventing the data. The honest 'I don't
+  know' is the product, not a failure of it."
+
+## 2026-07-11 — A flag isn't a task, it's a fork you should let the user see
+
+- Situation: Building the disambiguation graph (Phase 3). The instinct was to make
+  the agent investigate a flag. The mission reframed it: a flag is AMBIGUOUS — a
+  cash-conversion collapse has four plausible causes — and the single-branch loop
+  silently commits to one, burying the choice in its first tool call.
+- Lesson: the interface win isn't running the investigation faster — it's exposing
+  the hidden assumption (which explanation the agent bet on) as a visible, steerable
+  branch BEFORE spending budget. So the fan-out is a steering surface, not a
+  parallelism optimization. "Investigate all N and show results" is the tempting
+  engineer answer and it's wrong: four finished reports is a fait accompli, not a
+  choice — it spends budget to REMOVE the human's chance to correct the assumption.
+  Propose cheap (name the hypotheses), let the human steer, then go deep on one.
+- Post angle: "The obvious way to build an AI that handles an ambiguous request is
+  to make it pick an interpretation and run. The better way is to make it show you
+  the interpretations and let you pick — before it spends a dollar. Fan-out isn't
+  parallelism; it's a steering wheel."

@@ -25,7 +25,7 @@ from datetime import date
 from enum import Enum
 from typing import Any, Callable
 
-from .tools.contracts import FeatureResult
+from .tools.contracts import FeatureResult, GroundingMode
 
 JUDGE_MODEL = "claude-sonnet-5"  # cheaper tier than the Opus generator (ADR-6);
 #                                  same family, so only PARTIAL decorrelation.
@@ -89,44 +89,121 @@ def _judgment_tool() -> dict:
     }
 
 
+def _grounding_tool() -> dict:
+    """Strict schema for the SEMANTIC grounding head (ADR-7). The model reports
+    whether the passages support the answer's narrative claims — it does not opine
+    on structured figures (those are checked by `==`, never by a model)."""
+    return {
+        "name": "submit_grounding",
+        "description": (
+            "Report whether the investigator's answer faithfully characterizes the "
+            "provided filing passages. List any narrative claim the passages do not support."
+        ),
+        "strict": True,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "supported": {
+                    "type": "boolean",
+                    "description": "True only if every claim about the narrative follows from the passages.",
+                },
+                "unsupported_claims": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Each answer-claim about the narrative that the passages do not support (empty if all supported).",
+                },
+                "reasoning": {"type": "string", "description": "One or two sentences justifying the call."},
+            },
+            "required": ["supported", "unsupported_claims", "reasoning"],
+            "additionalProperties": False,
+        },
+    }
+
+
 class Judge:
     def __init__(self, client: Any, reverify: ReverifyFn, model: str = JUDGE_MODEL) -> None:
         self._client = client       # the judge MODEL client (C, O only)
         self._reverify = reverify   # independent re-fetch for G (deterministic)
         self._model = model
 
-    # --- G: deterministic, no model call ------------------------------------
+    # --- G: two-headed, dispatched by the evidence's declared mode (ADR-7) ----
 
-    def _check_grounding(self, evidence: list[FeatureResult]) -> tuple[bool, list[str]]:
-        """Re-fetch each evidence item from source; it is grounded iff every
-        (status, value) still matches. Trusts provenance, not the handed value."""
+    def _check_grounding(self, evidence: list, answer: str = "") -> tuple[bool, list[str]]:
+        """Grounding gate over MIXED evidence. Each item declares how to verify it
+        (`grounding_mode`), so the judge dispatches instead of `isinstance`-branching.
+        Overall grounded = deterministic items re-verify AND narrative items
+        semantically support the answer. Either head failing → not grounded."""
+        deterministic = [e for e in evidence if e.grounding_mode is GroundingMode.DETERMINISTIC]
+        semantic = [e for e in evidence if e.grounding_mode is GroundingMode.SEMANTIC]
         failed: list[str] = []
-        for item in evidence:
+
+        # Head 1 — structured: re-fetch by identity, compare ==. No model call.
+        for item in deterministic:
             prov = item.provenance
-            # Re-dispatch by identity (ticker + resolved quarter + feature), offset 0.
-            # Backend-agnostic: fake today, BQ later — the query string is not parsed.
             fresh = self._reverify(prov.ticker, prov.resolved_report_date, 0, [item.feature])
             match = next((r for r in fresh if r.feature == item.feature), None)
             if match is None or match.status != item.status or match.value != item.value:
                 failed.append(f"{item.feature}@{prov.resolved_report_date}")
+
+        # Head 2 — narrative: a model checks the passages support the answer's
+        # claims. You cannot == a paragraph; this catches the answer twisting the
+        # prose ("management admitted weakness" when it said "we remain confident").
+        if semantic:
+            supported, unsupported = self._check_semantic_grounding(answer, semantic)
+            if not supported:
+                failed.extend(unsupported or ["narrative claims not supported by passages"])
+
         return (len(failed) == 0, failed)
+
+    def _check_semantic_grounding(self, answer: str, narrative: list) -> tuple[bool, list[str]]:
+        """The SEMANTIC head of G: does every characterization of the narrative in
+        the answer follow from the retrieved passages? A model call — grounding is
+        deterministic only for structured data (ADR-2/ADR-7)."""
+        passages = json.dumps(
+            [{"section": r.section, "status": r.status.value, "passage": r.passage} for r in narrative]
+        )
+        prompt = (
+            "An investigator retrieved these EXACT filing passages (verbatim from "
+            f"source):\n{passages}\n\n"
+            f"It then wrote this answer:\n{answer}\n\n"
+            "Does every claim the answer makes ABOUT THE NARRATIVE follow from those "
+            "passages? Flag any characterization the passages do not support (e.g. "
+            "claiming management conceded a problem when the passage frames it as "
+            "temporary). Call submit_grounding."
+        )
+        resp = self._client.messages.create(
+            model=self._model,
+            max_tokens=1024,
+            tools=[_grounding_tool()],
+            tool_choice={"type": "tool", "name": "submit_grounding"},
+            messages=[{"role": "user", "content": prompt}],
+        )
+        payload = next((b.input for b in resp.content if getattr(b, "type", None) == "tool_use"), None)
+        if payload is None:
+            return (False, ["semantic grounding check produced no verdict"])
+        return (bool(payload["supported"]), list(payload["unsupported_claims"]))
 
     # --- C, O: the judge model ----------------------------------------------
 
-    def _grade_semantics(self, predicate: str, answer: str, evidence: list[FeatureResult]) -> JudgeVerdict:
+    @staticmethod
+    def _view(e) -> dict:
+        """Render one evidence item for the C/O grader — mode-aware, so a MIXED pile
+        of numbers and passages renders without assuming one type (ADR-7). Same
+        'tell, don't ask' dispatch the grounding gate uses."""
+        if e.grounding_mode is GroundingMode.SEMANTIC:
+            return {"kind": "narrative", "section": e.section, "status": e.status.value, "passage": e.passage}
+        return {
+            "kind": "metric",
+            "feature": e.feature,
+            "status": e.status.value,
+            "value": e.value,
+            "quarter": e.provenance.resolved_report_date.isoformat(),
+        }
+
+    def _grade_semantics(self, predicate: str, answer: str, evidence: list) -> JudgeVerdict:
         # The model sees the GENERATOR-facing view of the (now-verified) evidence —
         # it does not need provenance to judge C/O; provenance was G's concern.
-        evidence_view = json.dumps(
-            [
-                {
-                    "feature": e.feature,
-                    "status": e.status.value,
-                    "value": e.value,
-                    "resolved_report_date": e.provenance.resolved_report_date.isoformat(),
-                }
-                for e in evidence
-            ]
-        )
+        evidence_view = json.dumps([self._view(e) for e in evidence])
         prompt = (
             f"PREDICATE (the question the investigation must resolve):\n{predicate}\n\n"
             f"INVESTIGATOR'S PROPOSED CONCLUSION:\n{answer}\n\n"
@@ -160,7 +237,7 @@ class Judge:
 
     def evaluate(self, predicate: str, answer: str, evidence: list[FeatureResult]) -> JudgeVerdict:
         """Grade a proposed conclusion. Grounding gates everything (ADR-1)."""
-        grounded, failed = self._check_grounding(evidence)
+        grounded, failed = self._check_grounding(evidence, answer)
         if not grounded:
             # Short-circuit: C and O would be produced by the same untrustworthy
             # reasoning, so they are not consulted. Route to repair.

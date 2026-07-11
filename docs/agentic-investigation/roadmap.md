@@ -43,16 +43,29 @@
 >   contract(8)/loop(7)/judge(9). Live proof: `scripts/investigate_judged.py WBD`
 >   → Opus proposed "no recovery", Sonnet grounded all 9 evidence items, returned
 >   RESOLVED, correctly treated feature_missing as a limitation not an open question.
-> - **Right now — TOOL #2 (GCS narrative), the unstructured tool.** This is the
->   next checkpoint, NOT auto-build. It's the first test of ADR-2's unstructured
->   half (100% theory so far). Open decisions before code: (a) does the
->   `FeatureResult`/`Provenance` contract generalize to prose, or do we need a
->   sibling result type? (b) retrieval mechanism — real embedding RAG vs
->   section-addressed lookup vs keyword; do we need a vector store yet? (c) the
->   judge's G must become polymorphic — deterministic == for structured,
->   model-mode semantic support for narrative; how does it dispatch by evidence
->   type? (d) narrative input shape (section name? free-text query? both?).
-> - **Next after that:** Phase 3 disambiguation graph (fan-out N hypotheses).
+> - **TOOL #2 (GCS narrative) landed & proven live (ADR-7).** Sibling result type
+>   `NarrativeResult` (prose has no numeric value → separate type, illegal states
+>   unspellable). Grounding is now TWO-HEADED, dispatched by a `grounding_mode` tag
+>   each evidence item carries ("tell, don't ask"): `==` re-fetch for structured,
+>   a judge-model semantic support-check for prose. Retrieval is section-addressed
+>   (dict lookup), RAG-swappable behind the same contract (corpus fits in context;
+>   RAG deferred until cross-filing/huge-section need). Registry refactored to
+>   self-contained bindings (each carries its own built schema; the old shared
+>   `feature_keys` was a hidden structured-only assumption the 2nd tool exposed).
+>   New files: `tools/narrative_sections.py` + `_fake.py`; `contracts.py` gains
+>   `GroundingMode`/`NarrativeStatus`/`NarrativeProvenance`/`NarrativeResult`.
+>   Tests: 38 green (contract 8 / loop 7 / judge 9 / narrative 14). Live proof:
+>   `scripts/investigate_narrative.py WBD` — Opus used BOTH tools, judge grounded a
+>   mixed pile (9 numeric by ==, 1 passage by model), RESOLVED "said matches
+>   showed" (candid disclosure). This is backlog #1 "Said vs Showed" as an agent.
+> - **Phase 2 is functionally COMPLETE:** agentic loop + judge + one structured
+>   tool + one unstructured tool, all proven live, 38 tests. Real BQ/GCS bodies
+>   still stubbed (deliberate — fakes prove the mechanism).
+> - **Right now — pick the next phase:** (a) Phase 3 disambiguation graph (fan-out
+>   N hypotheses per flag, render NotebookLM-style, user steers); (b) wire a real
+>   backend (feature_history → BigQuery) to make one tool production-real; (c)
+>   tool #3 (FMP fundamentals) to prove the 3rd-tool-zero-judge-change claim.
+>   Recommend (a) — it's the product's headline feature and the loop is ready for it.
 
 ---
 

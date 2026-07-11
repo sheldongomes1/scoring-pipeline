@@ -65,11 +65,11 @@ def _registry() -> ToolRegistry:
     binding = ToolBinding(
         name="feature_history",
         callable=feature_history_fake,   # real BQ deferred (ADR-4); tool-choice is what we test
-        build_definition=tool_definition,
+        definition=tool_definition(FEATURE_KEYS),
         parse_input=parse_model_input,
         serialize=to_model_content,
     )
-    return ToolRegistry([binding], FEATURE_KEYS)
+    return ToolRegistry([binding])
 
 
 def _print_trace(messages: list) -> None:

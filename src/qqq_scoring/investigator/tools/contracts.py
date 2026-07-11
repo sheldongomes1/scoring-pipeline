@@ -11,6 +11,19 @@ from datetime import date, datetime
 from enum import Enum
 
 
+class GroundingMode(str, Enum):
+    """How a piece of evidence must be verified (ADR-7).
+
+    The evidence carries this so the judge dispatches on it instead of branching on
+    Python type ("tell, don't ask") — a new tool declares its mode and the judge is
+    untouched. The two modes exist because a number and a paragraph are verified
+    differently in KIND, which is exactly why they are separate result types.
+    """
+
+    DETERMINISTIC = "deterministic"  # structured: re-fetch by identity, compare `==`
+    SEMANTIC = "semantic"            # unstructured: a model checks passages support the claim
+
+
 class FeatureStatus(str, Enum):
     """Mutually-exclusive outcomes of one (feature, period) lookup.
 
@@ -51,12 +64,13 @@ class Provenance:
 
 @dataclass(frozen=True)
 class FeatureResult:
-    """One feature's value at one resolved period, plus its provenance."""
+    """One feature's value at one resolved period, plus its provenance (structured)."""
 
     feature: str
     status: FeatureStatus
     value: float | None       # populated iff status is FOUND
     provenance: Provenance
+    grounding_mode: GroundingMode = GroundingMode.DETERMINISTIC  # ADR-7: verify by re-fetch + ==
 
     def __post_init__(self) -> None:
         # Enforce ADR-2 principle 2 at run-time, not just by convention: value is
@@ -66,3 +80,60 @@ class FeatureResult:
             raise ValueError("FOUND result must carry a value")
         if self.status is not FeatureStatus.FOUND and self.value is not None:
             raise ValueError(f"{self.status.value} result must not carry a value")
+
+
+# ---------------------------------------------------------------------------
+# Unstructured (narrative) evidence — a SIBLING type, not a generalization of
+# FeatureResult (ADR-7). Prose has no numeric value, its provenance is a passage
+# locator (not a re-runnable query), and it is grounded SEMANTICALLY. Because it
+# is verified differently in kind, it is a different type — the type system then
+# forbids a float ever landing in a passage slot.
+# ---------------------------------------------------------------------------
+
+
+class NarrativeStatus(str, Enum):
+    """Mutually-exclusive outcomes of one (filing, section) lookup.
+
+    Distinct reasons-for-absence from FeatureStatus: a SECTION can be absent from a
+    filing that otherwise exists, which is different from a whole filing not being
+    found — and neither must be mistaken for an empty passage the judge would grade
+    as unsupported."""
+
+    FOUND = "found"                       # the section exists; passage returned
+    SECTION_ABSENT = "section_absent"     # the filing exists but omits this section
+    FILING_NOT_FOUND = "filing_not_found"  # no narrative document for this ticker/period
+
+
+@dataclass(frozen=True)
+class NarrativeProvenance:
+    """Locator that lets a skeptic re-reach the passage (ADR-2 principle 3, prose).
+
+    Not a re-runnable query — a crisp human-verifiable address: which section of
+    which filing. That address is a *cleaner* grounding handle than an embedding
+    chunk id, which is one reason ADR-7 chose section-addressed retrieval."""
+
+    source: str            # the golden document, e.g. the GCS narrative json path
+    ticker: str
+    report_date: date
+    form: str              # e.g. "10-Q"
+    section: str           # the named section addressed, e.g. "mdna"
+    retrieved_at: datetime
+
+
+@dataclass(frozen=True)
+class NarrativeResult:
+    """One section's prose at one filing, plus its provenance (unstructured)."""
+
+    section: str
+    status: NarrativeStatus
+    passage: str | None    # populated iff status is FOUND
+    provenance: NarrativeProvenance
+    grounding_mode: GroundingMode = GroundingMode.SEMANTIC  # ADR-7: verify by model support-check
+
+    def __post_init__(self) -> None:
+        # Same illegal-state guard as FeatureResult, one type over: a passage is
+        # present IFF the section was FOUND. An absent section must not carry text.
+        if self.status is NarrativeStatus.FOUND and self.passage is None:
+            raise ValueError("FOUND narrative result must carry a passage")
+        if self.status is not NarrativeStatus.FOUND and self.passage is not None:
+            raise ValueError(f"{self.status.value} narrative result must not carry a passage")

@@ -19,15 +19,19 @@ from typing import Any, Callable
 class ToolBinding:
     """Everything the registry needs to serve ONE tool, supplied by that tool.
 
-    Bundling the four functions per tool is what keeps the registry generic:
-    the registry calls these; it never contains a `if name == "feature_history"`.
+    Bundling these per tool keeps the registry generic: the registry calls them; it
+    never contains a `if name == "feature_history"`. `definition` is the FULLY-BUILT
+    Claude schema — the tool's enum vocabulary (feature keys, section names, ...) is
+    baked in by whoever constructs the binding, so the registry holds NO vocabulary
+    of its own (ADR-7: the second tool proved a shared `feature_keys` was a hidden
+    structured-only assumption).
     """
 
     name: str
-    callable: Callable[..., list]                 # the typed Python function (or fake)
-    build_definition: Callable[[list[str]], dict]  # tool_definition(feature_keys) -> Claude schema
-    parse_input: Callable[[dict], dict]            # model JSON input -> kwargs for `callable`
-    serialize: Callable[[list], str]               # results -> generator-facing tool_result content
+    callable: Callable[..., list]        # the typed Python function (or fake)
+    definition: dict                     # fully-built Claude tool-use schema (enum already baked in)
+    parse_input: Callable[[dict], dict]  # model JSON input -> kwargs for `callable`
+    serialize: Callable[[list], str]     # results -> generator-facing tool_result content
 
 
 @dataclass(frozen=True)
@@ -47,13 +51,12 @@ class DispatchOutcome:
 class ToolRegistry:
     """Holds the bindings; produces the tool menu; routes a call by name."""
 
-    def __init__(self, bindings: list[ToolBinding], feature_keys: list[str]) -> None:
+    def __init__(self, bindings: list[ToolBinding]) -> None:
         self._bindings = {b.name: b for b in bindings}
-        self._feature_keys = feature_keys
 
     def tool_definitions(self) -> list[dict]:
         """The `tools=[...]` menu sent to Claude — one definition per bound tool."""
-        return [b.build_definition(self._feature_keys) for b in self._bindings.values()]
+        return [b.definition for b in self._bindings.values()]
 
     def dispatch(self, name: str, model_input: dict) -> DispatchOutcome:
         """Run the named tool on the model's input; return (model_content, raw_results).

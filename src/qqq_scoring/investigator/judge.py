@@ -121,10 +121,21 @@ def _grounding_tool() -> dict:
 
 
 class Judge:
-    def __init__(self, client: Any, reverify: ReverifyFn, model: str = JUDGE_MODEL) -> None:
+    def __init__(self, client: Any, reverify: "ReverifyFn | dict[str, ReverifyFn]", model: str = JUDGE_MODEL) -> None:
         self._client = client       # the judge MODEL client (C, O only)
-        self._reverify = reverify   # independent re-fetch for G (deterministic)
+        # Deterministic re-fetch backend(s) for G (ADR-9). A single callable is the
+        # ONE-structured-backend shorthand; a {source: callable} map routes each item
+        # to the backend that produced it, keyed by provenance.source. The map is
+        # REQUIRED once >1 structured tool is in play — re-fetching a balance-sheet
+        # value against the feature backend finds nothing (the lone reverify was a
+        # hidden one-backend assumption the 2nd structured tool exposed).
+        self._reverify = reverify
         self._model = model
+
+    def _backend_for(self, item) -> "ReverifyFn | None":
+        if callable(self._reverify):
+            return self._reverify
+        return self._reverify.get(item.provenance.source)
 
     # --- G: two-headed, dispatched by the evidence's declared mode (ADR-7) ----
 
@@ -138,9 +149,14 @@ class Judge:
         failed: list[str] = []
 
         # Head 1 — structured: re-fetch by identity, compare ==. No model call.
+        # Route to the backend that produced the item, by provenance.source (ADR-9).
         for item in deterministic:
             prov = item.provenance
-            fresh = self._reverify(prov.ticker, prov.resolved_report_date, 0, [item.feature])
+            backend = self._backend_for(item)
+            if backend is None:
+                failed.append(f"{item.feature}@{prov.resolved_report_date} (no reverify backend for source {prov.source!r})")
+                continue
+            fresh = backend(prov.ticker, prov.resolved_report_date, 0, [item.feature])
             match = next((r for r in fresh if r.feature == item.feature), None)
             if match is None or match.status != item.status or match.value != item.value:
                 failed.append(f"{item.feature}@{prov.resolved_report_date}")

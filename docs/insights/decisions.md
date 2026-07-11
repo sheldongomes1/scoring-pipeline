@@ -601,3 +601,67 @@ a workflow.)
 - Interactivity (human picks a branch) is request-time — the first non-batch piece
   (mission), so orchestrate.py wiring is deferred; the batch pre-compute of level-1
   proposals vs. a `redink-ui` service is an open Phase-5 question.
+
+---
+
+## ADR-9: Tool #3 (balance-sheet line items) — reuse FeatureResult, and source-routed grounding
+
+**Date:** 2026-07-11
+**Status:** Accepted
+
+**Context:** The live disambiguation run (ADR-8) hit a wall: the working-capital
+and revenue-quality branches for WBD could not be resolved because the toolset had
+no receivables / payables / content-asset figures — the agent's own reasoning
+surfaced the missing tool. Tool #3 returns those raw balance-sheet line items
+(dollar amounts). Two decisions: does it get its own result type, and does the
+"add a tool, zero judge change" claim (ADR-7) hold?
+
+**Decision — two parts:**
+
+**1. Reuse `FeatureResult`, no new type.** A balance-sheet line item is a number
+verified the SAME way as an engineered ratio: re-fetch from the golden source,
+compare `==`. Identical DETERMINISTIC grounding *behaviour*. By ADR-7's own rule
+(behaviour difference → new type; data difference → reuse), dollars-vs-ratios is a
+*data* difference, so tool #3 reuses the structured contract — `FeatureResult`
+with the `feature` field holding the line-item key. A `LineItemResult` would create
+a type for exactly the reason ADR-7 forbids. (If `feature`-naming ever becomes a
+real problem, generalize to `StructuredResult`/`key` — a rename, deferred.)
+
+**2. Source-routed grounding — "zero judge change" was optimistic by one thing.**
+Reusing `FeatureResult` exposed a hidden assumption: the judge's deterministic
+grounding re-fetched through a SINGLE injected `reverify` callable — and that
+callable was the `feature_history` backend. A balance-sheet `FeatureResult`
+re-verified against the feature backend finds nothing (wrong source). So the lone
+`reverify` was a hidden one-backend assumption — the *same shape* as the registry's
+`feature_keys` (ADR-7), now the second occurrence of that pattern. Fix: `reverify`
+becomes `callable | {source: callable}`; the deterministic head routes each item to
+its backend by `provenance.source`. A single callable remains the one-backend
+shorthand (all prior sites unchanged); a map is REQUIRED once >1 structured tool is
+in play. This refines ADR-7: adding a tool of an *existing grounding mode* needs no
+new grounding *logic*, but a new structured *backend* needs a routing *entry*
+(config/data, not code) — the loop, registry, and generator are still zero-change.
+
+**Alternatives considered:**
+- *New `LineItemResult` type* — rejected (part 1): a type for a data difference,
+  which ADR-7's rule exists to prevent.
+- *Keep the lone `reverify`, ignore source* — rejected: silently re-verifies
+  balance-sheet values against the feature backend, which finds nothing — a false
+  ungrounded, or worse a false pass if keys collided. `test_routing_to_the_wrong_backend_is_caught`
+  guards this.
+- *Re-verify by re-dispatching through the registry (by tool name)* — deferred, not
+  rejected: more elegant (one routing concept for calls and re-checks) but needs
+  evidence→tool-name linkage the envelope doesn't carry yet. Source-map is the
+  simpler correct fix now.
+
+**Consequences:**
+- New `tools/balance_sheet.py` (contract stub + schema + adapters; reuses
+  `feature_history.to_model_content`) and `tools/balance_sheet_fake.py`.
+- `feature_history_fake._SOURCE` → public `SOURCE`, cleaned to the logical table
+  name (`qqq_finance.period_features`, no "fixture" suffix) so it is a stable
+  reverify-map key across fake→real backend swaps.
+- `Judge.__init__` accepts `reverify: callable | {source: callable}`; new
+  `_backend_for(item)` routes by `provenance.source`; unresolved source →
+  ungrounded (not a silent pass).
+- 50 tests green (contract 8 / loop 7 / judge 9 / narrative 14 / graph 4 /
+  balance-sheet 8). Live: `investigate_fanout.py h2` now RESOLVES the working-capital
+  branch on real line items — the gap the prior run exposed is closed.

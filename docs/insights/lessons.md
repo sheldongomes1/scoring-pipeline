@@ -225,3 +225,46 @@ the lesson body. Chronological order.
   to make it pick an interpretation and run. The better way is to make it show you
   the interpretations and let you pick — before it spends a dollar. Fan-out isn't
   parallelism; it's a steering wheel."
+
+## 2026-07-11 — The agent wrote its own feature request, and it resolved on the retry
+
+- Situation: A live disambiguation run stalled — the working-capital branch came
+  back "cannot confirm with available tools; the toolset has no receivables/payables
+  data." Rather than treat that as a failure, we read it as a spec: the agent had
+  named the exact tool it lacked.
+- What we did: built tool #3 (balance-sheet line items), wired it in, and re-ran the
+  IDENTICAL branch. It resolved cleanly — the agent fetched receivables/payables,
+  found them moving as a small cash source (not a drain), REJECTED the working-capital
+  hypothesis on real numbers, and pointed to content amortization instead.
+- Lesson: a grounded agent's "I can't answer this with what I have" is not noise —
+  it's a precise capability request, emitted by the system's own reasoning. If your
+  agent is honest about its limits (grounding-first design), its dead-ends become
+  your roadmap. The tightest feedback loop in the build was: agent hits wall → wall
+  names the missing tool → build it → same query resolves. That loop only exists
+  because the agent refuses to hallucinate past the gap.
+- Post angle: "My AI investigator hit a wall and told me exactly which tool it was
+  missing. I built that one tool, re-ran the same question, and it resolved. An
+  honest agent's 'I can't' is a feature request in disguise — but only if it won't
+  fake the answer instead."
+
+## 2026-07-11 — 'The one X' is a bet that there'll only ever be one X
+
+- Situation: Adding tool #3 (a second STRUCTURED tool). Its results reuse
+  FeatureResult and are grounded deterministically, so "add a tool, zero judge
+  change" (ADR-7) should have held. It didn't, quite.
+- What broke: the judge's grounding re-fetched through a SINGLE `reverify` callable
+  — which was the first tool's backend. A balance-sheet value re-verified against
+  the feature backend finds nothing. The lone `reverify` was a hidden bet that there
+  would only ever be one structured backend.
+- Lesson: this is the SECOND time this exact shape bit in one project — the registry
+  first assumed one `feature_keys` vocabulary, now the judge assumed one `reverify`
+  backend. The pattern: any singleton named "the X" (the config, the backend, the
+  client, the vocabulary) is an unstated assumption that X is unique, and the moment
+  a second X appears it breaks. Fix both times was the same move: route by an
+  identity the data already carries (tool name; provenance.source) instead of
+  hard-wiring the one. When you write "the reverify" / "the source," ask: what
+  happens on the second one?
+- Post angle: "Twice in one project the same bug shape bit me: 'the config,' then
+  'the backend.' Any singleton called 'the X' is a silent bet there'll only ever be
+  one X. The fix both times: route by an id the data already carries. When you name
+  something 'the,' ask what the second one does to you."

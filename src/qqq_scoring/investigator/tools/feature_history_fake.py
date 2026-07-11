@@ -20,7 +20,7 @@ from datetime import date, datetime, timezone
 
 from .contracts import FeatureResult, FeatureStatus, Provenance
 
-_SOURCE = "qqq_finance.period_features (in-memory fixture)"
+SOURCE = "qqq_finance.period_features"  # logical golden source; also the judge's reverify-map key
 
 # Quarter-end calendar for the fixture ticker. The tool — not the model — owns
 # this calendar math: it resolves report_date + period_offset to a real quarter.
@@ -95,7 +95,7 @@ def feature_history_fake(
         # Off-calendar or future quarter -> the period simply isn't filed yet.
         if resolved is None or resolved > _FILED_THROUGH:
             prov = Provenance(
-                source=_SOURCE,
+                source=SOURCE,
                 ticker=ticker,
                 resolved_report_date=resolved or report_date,
                 query=f"SELECT {feature} FROM period_features WHERE ticker='{ticker}' AND report_date='{resolved}'",
@@ -107,7 +107,7 @@ def feature_history_fake(
 
         row = _DATA.get((ticker, resolved), {})
         prov = Provenance(
-            source=_SOURCE,
+            source=SOURCE,
             ticker=ticker,
             resolved_report_date=resolved,
             query=f"SELECT {feature} FROM period_features WHERE ticker='{ticker}' AND report_date='{resolved}'",

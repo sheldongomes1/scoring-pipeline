@@ -80,11 +80,26 @@
 >   a branch whose answer was "hypothesis rejected / not fully testable" — defensible
 >   (the branch question got a grounded answer with a clear lean) but the
 >   resolved/inconclusive boundary is worth tuning as more branches run.
+> - **TOOL #3 (balance-sheet line items) landed & proven live (ADR-9).** Closes the
+>   gap the ADR-8 run exposed. REUSES `FeatureResult` (a line item is a number,
+>   grounded deterministically like a ratio — data difference, not behaviour, so
+>   ADR-7's rule says reuse). New `tools/balance_sheet.py` + `_fake.py`; feature
+>   fake `_SOURCE`→public `SOURCE` (clean logical table name). The honest catch:
+>   "zero judge change" (ADR-7) was optimistic by ONE thing — the judge's single
+>   `reverify` was a hidden one-backend assumption (same shape as the registry's
+>   `feature_keys`), so grounding now routes by `provenance.source`
+>   (`reverify: callable | {source: callable}`). Loop/registry/generator unchanged.
+>   50 tests green (…/ balance-sheet 8). Live: `investigate_fanout.py h2` now
+>   RESOLVES the working-capital branch on real line items — receivables/payables a
+>   small cash source, hypothesis rejected, content amortization identified as driver.
+> - **The self-healing loop:** agent hit a wall → wall named the missing tool → we
+>   built it → identical branch resolved. Logged as a lesson (portfolio gold).
 > - **Right now — pick the next phase:** (a) Phase 4 — a resolved branch spawns
->   CHILD branches (the graph grows; depth/breadth limits); (b) tool #3 = FMP/BQ
->   balance-sheet line items (the gap the live run exposed — highest product value);
->   (c) Phase 5 — wire into orchestrate.py / redink-ui (batch level-1 proposals vs
->   interactive service). Recommend (b): the investigation itself asked for it.
+>   CHILD branches (the graph grows recursively; depth/breadth limits + convergence);
+>   (b) wire a real backend (feature_history → BigQuery, or balance_sheet → FMP) to
+>   make one tool production-real; (c) Phase 5 — wire into orchestrate.py / redink-ui
+>   (batch level-1 proposals vs interactive service — the first non-batch piece).
+>   Recommend (a): the graph is the product's soul and Phase 4 is where it grows.
 
 ---
 

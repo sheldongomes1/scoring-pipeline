@@ -27,8 +27,12 @@ from anthropic import Anthropic  # noqa: E402
 from qqq_scoring.investigator.graph import BranchStatus, Flag, propose_branches, run_branch  # noqa: E402
 from qqq_scoring.investigator.judge import Judge  # noqa: E402
 from qqq_scoring.investigator.registry import ToolBinding, ToolRegistry  # noqa: E402
+from qqq_scoring.investigator.tools import balance_sheet as bs  # noqa: E402
 from qqq_scoring.investigator.tools import feature_history as fh  # noqa: E402
 from qqq_scoring.investigator.tools import narrative_sections as ns  # noqa: E402
+from qqq_scoring.investigator.tools.balance_sheet_fake import SOURCE as BS_SOURCE  # noqa: E402
+from qqq_scoring.investigator.tools.balance_sheet_fake import balance_sheet_items as balance_sheet_fake  # noqa: E402
+from qqq_scoring.investigator.tools.feature_history_fake import SOURCE as FH_SOURCE  # noqa: E402
 from qqq_scoring.investigator.tools.feature_history_fake import feature_history_fake  # noqa: E402
 from qqq_scoring.investigator.tools.narrative_sections_fake import narrative_sections_fake  # noqa: E402
 
@@ -58,6 +62,8 @@ def _registry() -> ToolRegistry:
     return ToolRegistry([
         ToolBinding("feature_history", feature_history_fake, fh.tool_definition(FEATURE_KEYS),
                     fh.parse_model_input, fh.to_model_content),
+        ToolBinding("balance_sheet_items", balance_sheet_fake, bs.tool_definition(bs.ITEM_KEYS),
+                    bs.parse_model_input, bs.to_model_content),
         ToolBinding("narrative_sections", narrative_sections_fake, ns.tool_definition(ns.SECTION_KEYS),
                     ns.parse_model_input, ns.to_model_content),
     ])
@@ -79,7 +85,9 @@ def _print_graph(graph, chosen_id=None) -> None:
 def main() -> None:
     chosen_id = sys.argv[1] if len(sys.argv) > 1 else "h1"
     generator = Anthropic()
-    judge = Judge(client=Anthropic(), reverify=feature_history_fake)
+    # Source-routed re-verification (ADR-9): two structured backends, each keyed by
+    # the source its evidence carries, so the judge re-fetches each item correctly.
+    judge = Judge(client=Anthropic(), reverify={FH_SOURCE: feature_history_fake, BS_SOURCE: balance_sheet_fake})
 
     # 1 + 2 — FAN OUT and render the steering surface.
     print("\n══ FANNING OUT (cheap: naming hypotheses, no investigation) ══")

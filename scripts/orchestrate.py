@@ -141,6 +141,14 @@ STEPS = [
         "depends_on": [5],                          # joins scores+conviction+divergence
         "note":       "Per-filing pillar+feature breakdown for the UI \"Explain the numbers\" modal → BQ score_explanation",
     },
+    {
+        "num":        10,
+        "name":       "Propose investigation branches → investigation_branches",
+        "script":     "explanations/propose_investigation_branches.py",
+        "args":       [],
+        "depends_on": [8],                          # needs analyst_actions.key_question + filing_intelligence flags
+        "note":       "BATCH half of the disambiguation graph: propose_branches per ALERT/FLAG filing → BQ investigation_branches (roots the interactive redink-ui service consumes). Agentic Investigator ADR-8/Phase-5.",
+    },
 ]
 
 

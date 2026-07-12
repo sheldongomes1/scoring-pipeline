@@ -94,8 +94,12 @@
 >   small cash source, hypothesis rejected, content amortization identified as driver.
 > - **The self-healing loop:** agent hit a wall → wall named the missing tool → we
 >   built it → identical branch resolved. Logged as a lesson (portfolio gold).
-> - **PHASE 4 (recursive expansion) landed (ADR-10); 55 tests green; live tree
->   running.** A RESOLVED branch's finding spawns deeper CHILD branches — the graph
+> - **PHASE 4 (recursive expansion) landed & PROVEN LIVE (ADR-10); 55 tests green.**
+>   `investigate_tree.py h3` grew a tree 2 levels / 4 nodes autonomously off one
+>   human steer (h3 → h3.1 → {h3.1.1, h3.1.2}); node budget (4) and max_depth (2)
+>   both bit exactly; the grounding repair loop fired at EVERY node. (Steering into
+>   an INCONCLUSIVE root (h1) correctly spawned nothing — the leaf rule, live.)
+>   A RESOLVED branch's finding spawns deeper CHILD branches — the graph
 >   grows into a tree. `Branch` gained `children` + `depth`; new `propose_children`
 >   (seeded follow-up proposer), `ExpansionBudget` (global node cap), and `expand`
 >   (recursive orchestrator with injectable `_investigate`/`_propose` so the control

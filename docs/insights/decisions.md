@@ -735,3 +735,88 @@ safety that makes autonomous expansion acceptable.
 - New `scripts/investigate_tree.py` — steer into a root, then autonomously expand
   it within tight caps, print the grown tree. Mock-but-real (fakes stay).
 - Caps are config, not code — tuning breadth/depth/budget never touches logic.
+
+---
+
+## ADR-11: Three-valued confirm axis — 'refuted' is a resolution, not ambiguity
+
+**Date:** 2026-07-12
+**Status:** Accepted
+
+**Context:** Two live runs graded a REJECTED hypothesis inconsistently: the
+fan-out's working-capital rejection → `RESOLVED`, the tree's impairment rejection →
+`INCONCLUSIVE`. Same *kind* of answer ("this hypothesis is refuted"), different
+terminal state — and it now changes the graph's shape, because only `RESOLVED`
+branches spawn children (ADR-10). Root cause: the judge's `Confirm` axis was
+two-valued (`RESOLVED` / `UNRESOLVED`), which collapsed ADR-1's original
+*confirm-vs-refute* distinction. The model had nowhere clean to put "refuted," so
+it drifted — sometimes to RESOLVED, sometimes to UNRESOLVED.
+
+**Decision:** Restore ADR-1's axis with THREE values: `Confirm =
+{CONFIRMED, REFUTED, INDETERMINATE}`. A predicate is a question; **both** a definite
+yes (CONFIRMED) and a definite no (REFUTED) *answer* it, so both map to the
+`RESOLVED` terminal state. Only genuine INDETERMINATE (evidence can't decide) maps
+to `INCONCLUSIVE`. The judgment tool's `confirm` description now instructs
+explicitly: "a hypothesis you REJECTED on the evidence is 'refuted', NOT
+'indeterminate'." Loop routing checks open-questions first, then
+`confirm ∈ {CONFIRMED, REFUTED} → RESOLVED`, else `INCONCLUSIVE`.
+
+**Alternatives considered:**
+- *Keep two values, clarify the prompt* — rejected: the enum itself lacked a slot
+  for "refuted", so no prompt wording reliably prevents the drift; the fix must be
+  structural (a value to put it in).
+- *Sub-type RESOLVED into resolved-yes/resolved-no downstream* — deferred: not
+  needed yet; the graph only needs the RESOLVED/INCONCLUSIVE distinction to decide
+  spawning. The confirm/refute detail is preserved on the verdict for later use
+  (e.g. rendering "hypothesis confirmed" vs "ruled out" in the UI).
+
+**Consequences:**
+- `judge.py`: `Confirm` enum (3 values), the `submit_judgment` schema description,
+  and the no-verdict fallback (`INDETERMINATE`) updated.
+- `loop.py`: routing maps CONFIRMED/REFUTED → RESOLVED, INDETERMINATE → INCONCLUSIVE.
+- Tests updated to the new enum; new `test_refuted_hypothesis_resolves_not_inconclusive`
+  guards the exact bug. 56 tests green.
+- Downstream: a "ruled out" branch is now consistently RESOLVED, so a refutation can
+  legitimately spawn deeper children (e.g. "if not working capital, then what?") —
+  the graph shape stops depending on a coin-flip.
+
+---
+
+## ADR-12: Real BigQuery backend for feature_history — positional period resolution
+
+**Date:** 2026-07-12
+**Status:** Accepted
+
+**Context:** Making one tool production-real (`feature_history` → BigQuery
+`qqq_finance.period_features`). The one genuinely-new piece the fake hand-waved:
+resolving `report_date + period_offset` to an actual quarter against REAL filings.
+
+**Decision — positional offset, not calendar.** `period_offset` counts FILED
+periods in the ticker's own history (index into its ordered `target_period_end`
+list), NOT calendar months. Real fiscal calendars are irregular: AAPL files 3
+10-Qs/year on shifting dates (Mar/Jun/Dec, no September 10-Q), so "+1 quarter" =
+"the next FILED 10-Q," resolved by index. Calendar arithmetic (`+3 months`) would
+land on a quarter that doesn't exist for that company and silently break every
+non-December fiscal year. This is also what an analyst means by "next quarter's
+filing." One query pulls the ticker's ordered history + values; resolution happens
+in Python; the value is read off the resolved row.
+
+**Alternatives considered:**
+- *Calendar arithmetic (`report_date + 3·offset months`)* — rejected: breaks on
+  irregular fiscal calendars and filing gaps; lands on non-existent quarters.
+- *Two queries (periods, then values)* — rejected: one query returns both; resolve
+  in Python.
+
+**Consequences:**
+- New `tools/feature_history_bq.py` — drop-in for the fake: same signature, same
+  `FeatureResult`, same `SOURCE` key (`qqq_finance.period_features`), so the
+  fake→real swap is a ONE-LINE binding change and the judge's reverify-map entry is
+  unchanged (the ADR-9 source-cleanup paying off). Grounding re-queries real BQ.
+- Parameterized query + a `_quote_ident` guard on feature names (defense in depth,
+  though the enum already constrains the model).
+- Verified live (AAPL: −1/0/+1 resolve to 2025-03-29 / 06-28 / 12-27; +99 →
+  PERIOD_NOT_FILED; null net_margin → FEATURE_MISSING). Resolution logic unit-tested
+  with an injected fake client (6 tests, no creds needed). 62 tests total.
+- Real BQ body still lives beside the `NotImplementedError` stub in
+  `feature_history.py` (the contract reference); the callable is injected, so both
+  coexist — swap per environment.

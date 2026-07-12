@@ -181,17 +181,18 @@ def run_investigation(
             messages.append({"role": "user", "content": _repair_prompt(verdict)})
             continue
 
-        if verdict.confirm is Confirm.RESOLVED and not verdict.open_questions:
-            return TerminalResult(
-                TerminalReason.RESOLVED, turns, last_answer, tool_calls, messages, evidence, verdict
-            )
-
         if verdict.open_questions:
             # Grounded but incomplete — send it back to gather more (ADR-1 loop).
             messages.append({"role": "user", "content": _continue_prompt(verdict)})
             continue
 
-        # Grounded, clean, but genuinely ambiguous — a USEFUL terminal state (ADR-1).
+        # Grounded, no open questions. The predicate is answered either way —
+        # CONFIRMED or REFUTED are BOTH resolutions (ADR-11). Only a genuinely
+        # INDETERMINATE verdict is the (useful) inconclusive terminal state.
+        if verdict.confirm in (Confirm.CONFIRMED, Confirm.REFUTED):
+            return TerminalResult(
+                TerminalReason.RESOLVED, turns, last_answer, tool_calls, messages, evidence, verdict
+            )
         return TerminalResult(
             TerminalReason.INCONCLUSIVE, turns, last_answer, tool_calls, messages, evidence, verdict
         )

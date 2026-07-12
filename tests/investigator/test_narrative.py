@@ -215,7 +215,7 @@ def test_evaluate_full_path_with_mixed_evidence():
             _Response([_ToolUseBlock("submit_grounding",
                 {"supported": True, "unsupported_claims": [], "reasoning": "supported"})]),
             _Response([_ToolUseBlock("submit_judgment",
-                {"confirm": "resolved", "open_questions": False, "reasoning": "recovered, timing temporary"})]),
+                {"confirm": "confirmed", "open_questions": False, "reasoning": "recovered, timing temporary"})]),
         ]),
         reverify=feature_history_fake,
     )
@@ -225,7 +225,7 @@ def test_evaluate_full_path_with_mixed_evidence():
         structured + narrative,
     )
     assert verdict.grounded is True
-    assert verdict.confirm.value == "resolved"
+    assert verdict.confirm.value == "confirmed"
     assert verdict.open_questions is False
 
 

@@ -36,8 +36,15 @@ ReverifyFn = Callable[[str, date, int, list], list[FeatureResult]]
 
 
 class Confirm(str, Enum):
-    RESOLVED = "resolved"       # the evidence answers the predicate
-    UNRESOLVED = "unresolved"   # evidence is clean but genuinely ambiguous
+    """How the evidence bears on the predicate (ADR-11 — three-valued, restoring
+    ADR-1's confirm/refute axis). A two-valued resolved/unresolved collapsed
+    'refuted' into 'unresolved', so the judge graded rejected hypotheses
+    inconsistently. CONFIRMED and REFUTED are BOTH resolutions; only INDETERMINATE
+    is genuine ambiguity."""
+
+    CONFIRMED = "confirmed"          # evidence supports the predicate (a definite yes)
+    REFUTED = "refuted"              # evidence contradicts the predicate (a definite no — a RESOLUTION)
+    INDETERMINATE = "indeterminate"  # evidence genuinely cannot decide either way
 
 
 @dataclass(frozen=True)
@@ -72,7 +79,12 @@ def _judgment_tool() -> dict:
                 "confirm": {
                     "type": "string",
                     "enum": [c.value for c in Confirm],
-                    "description": "'resolved' if the evidence answers the predicate; 'unresolved' if evidence is clean but genuinely ambiguous.",
+                    "description": (
+                        "How the evidence bears on the predicate: 'confirmed' (evidence supports it), "
+                        "'refuted' (evidence contradicts it — a definite NO, which IS a resolution), or "
+                        "'indeterminate' (evidence genuinely cannot decide either way). A hypothesis you "
+                        "REJECTED on the evidence is 'refuted', NOT 'indeterminate'."
+                    ),
                 },
                 "open_questions": {
                     "type": "boolean",
@@ -241,7 +253,7 @@ class Judge:
         if payload is None:
             # The judge failing to grade is itself a grounding-style failure of the
             # judgment step — treat as unresolved+open so the loop doesn't stop clean.
-            return JudgeVerdict(True, Confirm.UNRESOLVED, True, "judge produced no verdict")
+            return JudgeVerdict(True, Confirm.INDETERMINATE, True, "judge produced no verdict")
         return JudgeVerdict(
             grounded=True,
             confirm=Confirm(payload["confirm"]),

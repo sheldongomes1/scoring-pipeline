@@ -174,12 +174,12 @@ def test_grounded_evidence_gets_a_model_grade():
     evidence = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
     judge_client = ScriptedClient(
         [_Response("tool_use", [_ToolUseBlock("j1", "submit_judgment",
-            {"confirm": "resolved", "open_questions": False, "reasoning": "recovered to 0.95"})])]
+            {"confirm": "confirmed", "open_questions": False, "reasoning": "recovered to 0.95"})])]
     )
     judge = Judge(client=judge_client, reverify=feature_history_fake)
     verdict = judge.evaluate("did ocf_to_net_income recover?", "yes, to 0.95", evidence)
     assert verdict.grounded is True
-    assert verdict.confirm is Confirm.RESOLVED
+    assert verdict.confirm is Confirm.CONFIRMED
     assert verdict.open_questions is False
 
 
@@ -187,15 +187,19 @@ def test_grounded_evidence_gets_a_model_grade():
 
 
 def _resolved_v():
-    return JudgeVerdict(True, Confirm.RESOLVED, False, "resolved")
+    return JudgeVerdict(True, Confirm.CONFIRMED, False, "confirmed")
+
+
+def _refuted_v():
+    return JudgeVerdict(True, Confirm.REFUTED, False, "hypothesis rejected on evidence")
 
 
 def _inconclusive_v():
-    return JudgeVerdict(True, Confirm.UNRESOLVED, False, "ambiguous")
+    return JudgeVerdict(True, Confirm.INDETERMINATE, False, "ambiguous")
 
 
 def _open_v():
-    return JudgeVerdict(True, Confirm.UNRESOLVED, True, "need next quarter")
+    return JudgeVerdict(True, Confirm.INDETERMINATE, True, "need next quarter")
 
 
 def _ungrounded_v():
@@ -206,7 +210,16 @@ def test_loop_stops_resolved():
     client = ScriptedClient([_end_turn("recovered")])
     res = run_investigation(client, _registry(), "task", judge=FakeJudge([_resolved_v()]))
     assert res.reason is TerminalReason.RESOLVED
-    assert res.verdict.confirm is Confirm.RESOLVED
+    assert res.verdict.confirm is Confirm.CONFIRMED
+
+
+def test_refuted_hypothesis_resolves_not_inconclusive():
+    """ADR-11: a hypothesis REFUTED on the evidence is RESOLVED, not INCONCLUSIVE —
+    the calibration bug the live tree run exposed (rejected branch graded inconclusive)."""
+    client = ScriptedClient([_end_turn("hypothesis rejected on the evidence")])
+    res = run_investigation(client, _registry(), "task", judge=FakeJudge([_refuted_v()]))
+    assert res.reason is TerminalReason.RESOLVED
+    assert res.verdict.confirm is Confirm.REFUTED
 
 
 def test_loop_stops_inconclusive():

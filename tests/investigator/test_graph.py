@@ -141,7 +141,7 @@ def test_run_branch_steers_the_loop_and_stamps_status():
     graph = propose_branches(client, _flag(), n=4)
 
     generator = ScriptedClient([_Response("end_turn", [_TextBlock("Recovered — timing swing.")])])
-    judge = FakeJudge(JudgeVerdict(True, Confirm.RESOLVED, False, "resolved"))
+    judge = FakeJudge(JudgeVerdict(True, Confirm.CONFIRMED, False, "confirmed"))
 
     branch = run_branch(graph.get("h1"), graph.flag, generator, _registry(), judge)
     assert branch.status is BranchStatus.RESOLVED

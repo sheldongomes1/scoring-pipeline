@@ -109,14 +109,21 @@
 >   up a level; ABANDONED/INCONCLUSIVE = leaves). Auto-expands within caps (human
 >   steered once at the root). New `scripts/investigate_tree.py`. Tests: graph 4→9
 >   (5 new control-logic tests). Fakes stay ("mock data but real").
-> - **Right now — pick the next phase:** (a) Phase 5 — wire into orchestrate.py /
->   redink-ui (batch pre-compute of level-1 proposals vs interactive branch-steering
->   service — the first NON-BATCH piece; breaks the everything-is-a-DAG-step
->   assumption); (b) wire a real backend (feature_history → BigQuery, or
->   balance_sheet → FMP) to make one tool production-real; (c) Phase 6 — eval in
->   qqq-eval-suite (is the agent's evidence grounded? does it answer the
->   key_question? cost/latency per investigation + per tree). Interview deferred by
->   Sheldon until the product is live in prod.
+> - **(a) DONE — ADR-11 calibration fix:** three-valued `Confirm`
+>   (CONFIRMED/REFUTED/INDETERMINATE); refuted → RESOLVED. 56→ tests.
+> - **(b) DONE — ADR-12 real BigQuery backend:** `tools/feature_history_bq.py`,
+>   positional period resolution across irregular fiscal calendars, verified live
+>   against `qqq_finance.period_features` (AAPL) + 6 unit tests. 62 tests total.
+>   Fake→real swap = one-line binding change; SOURCE key unchanged so grounding
+>   re-queries real BQ.
+> - **(c) IN PROGRESS — Phase 5 prod surface.** Open checkpoint: the investigator is
+>   INTERACTIVE (human steers a branch at request time), which collides with
+>   CLAUDE.md's "every pipeline element is an orchestrate.py step" mandate. Likely
+>   resolution: SPLIT — batch pre-compute of level-1 branch PROPOSALS per flagged
+>   filing = an orchestrate.py step writing a BQ table; interactive steer + deep-dive
+>   = a request-time redink-ui service (the UI half is a separate, larger effort).
+> - **After (c):** Phase 6 eval in qqq-eval-suite (grounded? answers key_question?
+>   cost/latency per tree). Interview deferred by Sheldon until live in prod.
 
 ---
 

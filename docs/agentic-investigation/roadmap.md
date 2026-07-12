@@ -94,12 +94,25 @@
 >   small cash source, hypothesis rejected, content amortization identified as driver.
 > - **The self-healing loop:** agent hit a wall → wall named the missing tool → we
 >   built it → identical branch resolved. Logged as a lesson (portfolio gold).
-> - **Right now — pick the next phase:** (a) Phase 4 — a resolved branch spawns
->   CHILD branches (the graph grows recursively; depth/breadth limits + convergence);
->   (b) wire a real backend (feature_history → BigQuery, or balance_sheet → FMP) to
->   make one tool production-real; (c) Phase 5 — wire into orchestrate.py / redink-ui
->   (batch level-1 proposals vs interactive service — the first non-batch piece).
->   Recommend (a): the graph is the product's soul and Phase 4 is where it grows.
+> - **PHASE 4 (recursive expansion) landed (ADR-10); 55 tests green; live tree
+>   running.** A RESOLVED branch's finding spawns deeper CHILD branches — the graph
+>   grows into a tree. `Branch` gained `children` + `depth`; new `propose_children`
+>   (seeded follow-up proposer), `ExpansionBudget` (global node cap), and `expand`
+>   (recursive orchestrator with injectable `_investigate`/`_propose` so the control
+>   logic is unit-testable with NO LLM). Termination = ADR-1 lifted a level: semantic
+>   stop (proposer returns no new questions) + TWO independent hard caps (`max_depth`,
+>   `max_total_branches` — not summed). Only RESOLVED spawns (grounding-as-precondition
+>   up a level; ABANDONED/INCONCLUSIVE = leaves). Auto-expands within caps (human
+>   steered once at the root). New `scripts/investigate_tree.py`. Tests: graph 4→9
+>   (5 new control-logic tests). Fakes stay ("mock data but real").
+> - **Right now — pick the next phase:** (a) Phase 5 — wire into orchestrate.py /
+>   redink-ui (batch pre-compute of level-1 proposals vs interactive branch-steering
+>   service — the first NON-BATCH piece; breaks the everything-is-a-DAG-step
+>   assumption); (b) wire a real backend (feature_history → BigQuery, or
+>   balance_sheet → FMP) to make one tool production-real; (c) Phase 6 — eval in
+>   qqq-eval-suite (is the agent's evidence grounded? does it answer the
+>   key_question? cost/latency per investigation + per tree). Interview deferred by
+>   Sheldon until the product is live in prod.
 
 ---
 

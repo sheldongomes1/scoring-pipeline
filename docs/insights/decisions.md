@@ -665,3 +665,73 @@ new grounding *logic*, but a new structured *backend* needs a routing *entry*
 - 50 tests green (contract 8 / loop 7 / judge 9 / narrative 14 / graph 4 /
   balance-sheet 8). Live: `investigate_fanout.py h2` now RESOLVES the working-capital
   branch on real line items — the gap the prior run exposed is closed.
+
+---
+
+## ADR-10: Phase 4 — recursive expansion, and graph-level termination
+
+**Date:** 2026-07-12
+**Status:** Accepted
+
+**Context:** A resolved branch's finding can raise a NEW, deeper question ("content
+amortization is the driver" → "is the amortization schedule aggressive vs peers?"),
+which warrants its own investigation — a child branch. The graph grows into a tree.
+Unbounded, this recurses forever, and growth is EXPONENTIAL (breadth^depth), each
+node a full LLM investigation. Phase 4 needs a graph-level termination condition —
+the same problem ADR-1 solved for the single loop, one level up.
+
+**Decision — four parts:**
+
+**1. Termination = semantic stop + independent hard backstop (ADR-1, lifted a
+level).** Relying only on the semantic "no new questions" signal is the exact bet
+ADR-1 rejected ("trust the model's done-bit") — a chain can plausibly emit "one
+more question" forever. So, mirroring ADR-1's two independent caps:
+- *Semantic stop:* a resolved branch is offered to a follow-up proposer; if it
+  returns no genuinely-new questions → leaf.
+- *Hard backstop:* `max_depth` (levels) AND `max_total_branches` (global node
+  budget), each an independent ceiling — NOT summed (the cap-independence lesson).
+  Because growth is exponential, the hard cap is even more load-bearing here than
+  at the loop level.
+
+**2. Only a RESOLVED branch spawns — grounding-as-precondition, one level up.** You
+do not build a deeper investigation on a foundation you couldn't ground.
+`ABANDONED` (grounding failed) → **leaf always** (its finding is untrustworthy;
+children would stack garbage on garbage — ADR-1's rejected "loop on ungrounded
+output"). `INCONCLUSIVE` → **leaf** for v1 (no solid finding to extend; "reframe
+and try a differently-angled child" is a defensible later refinement). Only
+`RESOLVED` earns a follow-up proposal.
+
+**3. Children come from a fresh follow-up proposer, NOT the loop's `open_questions`
+flag.** A branch that terminates RESOLVED has, by ADR-6's rule, NO within-loop open
+questions (that is the termination condition). The graph-level question is
+different: "what NEW, deeper line of inquiry does this *resolved finding* raise?"
+So children are proposed by a separate `propose_children` call seeded with the
+parent's finding + verdict — reusing the ADR-8 proposer, allowed to return empty
+(empty = leaf, the semantic stop).
+
+**4. Auto-expand within the caps; the human steered once, at the root.** Per the
+mission ("chosen branch runs autonomously; results may spawn child branches"), the
+chosen subtree expands autonomously, bounded by the hard caps — the human's steering
+happened once in Phase 3 (picking the root). Propose-and-steer at *every* level is
+a defensible UX (keeps a human in each fork) but is deferred; the hard caps are the
+safety that makes autonomous expansion acceptable.
+
+**Alternatives considered:**
+- *Semantic stop only (no hard cap)* — rejected: ADR-1's rejected done-bit, worse
+  because growth is exponential.
+- *Spawn from any terminal state* — rejected: extending ABANDONED/INCONCLUSIVE
+  branches builds on ungrounded/absent findings (violates grounding-as-precondition).
+- *Reuse the loop's `open_questions` to decide spawning* — rejected: a RESOLVED
+  branch has none by construction; spawning needs a NEW-question signal, not an
+  unfinished-within-loop one.
+- *Steer at every level* — deferred, not rejected (a Phase-5 UX choice).
+
+**Consequences:**
+- `Branch` gains `children: list[Branch]` and `depth: int`; the graph is now a tree.
+- New `propose_children` (seeded proposer), `ExpansionBudget` (node counter), and
+  `expand` (recursive orchestrator) in `graph.py`. `expand` takes injectable
+  `_investigate` / `_propose` hooks so the tree-growth CONTROL logic (caps,
+  which-status-spawns) is unit-testable without any LLM.
+- New `scripts/investigate_tree.py` — steer into a root, then autonomously expand
+  it within tight caps, print the grown tree. Mock-but-real (fakes stay).
+- Caps are config, not code — tuning breadth/depth/budget never touches logic.

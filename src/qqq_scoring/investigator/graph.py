@@ -53,8 +53,9 @@ class Flag:
 
 @dataclass
 class Branch:
-    """One hypothesis node. `predicate` is the steering wire (ADR-8); `result` is
-    the loop's TerminalResult once this branch is investigated."""
+    """One hypothesis node in the tree. `predicate` is the steering wire (ADR-8);
+    `result` is the loop's TerminalResult once investigated; `children` are the
+    deeper branches a RESOLVED finding spawned (ADR-10)."""
 
     id: str
     hypothesis: str   # the one-line causal story
@@ -62,6 +63,8 @@ class Branch:
     predicate: str    # the reframed question handed to run_investigation (NOT a metric list)
     status: BranchStatus = BranchStatus.PROPOSED
     result: Any = None
+    depth: int = 0                      # 0 = a root branch off the flag
+    children: list["Branch"] = field(default_factory=list)
 
 
 @dataclass
@@ -176,4 +179,110 @@ def run_branch(
     )
     branch.result = result
     branch.status = _STATUS_FROM_REASON.get(result.reason, BranchStatus.INCONCLUSIVE)
+    return branch
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — recursive expansion (ADR-10). A RESOLVED branch's finding can raise a
+# NEW deeper question → a child branch. The tree grows, bounded by a semantic stop
+# (the follow-up proposer returns nothing) AND two independent hard caps
+# (max_depth, max_total_branches) — ADR-1's termination, lifted a level.
+# ---------------------------------------------------------------------------
+
+
+def propose_children(client: Any, flag: Flag, parent: Branch, n: int = 3, model: str = PROPOSER_MODEL) -> list[Branch]:
+    """Seeded proposer: given a RESOLVED branch's finding, what NEW deeper questions
+    warrant their own investigation? Returns [] when the finding is a satisfying
+    endpoint — that empty return IS the semantic leaf signal (ADR-10)."""
+    finding = parent.result.final_text if parent.result else ""
+    prompt = (
+        f"An investigation into {flag.ticker} {flag.form} @ {flag.report_date} resolved a hypothesis.\n"
+        f"  Hypothesis: {parent.hypothesis}\n"
+        f"  Question tested: {parent.predicate}\n"
+        f"  Finding: {finding}\n\n"
+        f"What NEW, DEEPER questions does this finding raise that each warrant their own "
+        f"investigation (not a rephrasing of the above)? Propose up to {n}. If the finding "
+        f"is a satisfying endpoint that raises no deeper answerable question, return an "
+        f"empty list. Call propose_hypotheses."
+    )
+    resp = client.messages.create(
+        model=model,
+        max_tokens=1500,
+        tools=[_proposer_tool(n)],
+        tool_choice={"type": "tool", "name": "propose_hypotheses"},
+        messages=[{"role": "user", "content": prompt}],
+    )
+    payload = next((b.input for b in resp.content if getattr(b, "type", None) == "tool_use"), None)
+    hypotheses = (payload or {}).get("hypotheses", [])[:n]
+    return [
+        Branch(
+            id=f"{parent.id}.{i + 1}",           # e.g. h2.1, h2.2 — path encodes lineage
+            hypothesis=h["hypothesis"],
+            rationale=h["rationale"],
+            predicate=h["predicate"],
+            depth=parent.depth + 1,
+        )
+        for i, h in enumerate(hypotheses)
+    ]
+
+
+class ExpansionBudget:
+    """Global node budget for one expansion — the hard backstop against exponential
+    breadth^depth growth, independent of max_depth and of the semantic stop (ADR-10)."""
+
+    def __init__(self, max_total_branches: int) -> None:
+        self.max_total = max_total_branches
+        self.spent = 0
+
+    def spend(self) -> None:
+        self.spent += 1
+
+    def remaining(self) -> int:
+        return max(0, self.max_total - self.spent)
+
+
+def expand(
+    branch: Branch,
+    flag: Flag,
+    generator: Any,
+    registry: ToolRegistry,
+    judge: Any,
+    *,
+    system: str = "",
+    max_depth: int = 2,
+    budget: "ExpansionBudget | None" = None,
+    breadth: int = 3,
+    _investigate=run_branch,   # injectable so the tree-control logic is unit-testable
+    _propose=propose_children,  # without any LLM (defaults call the real thing)
+) -> Branch:
+    """Investigate `branch`, then recursively expand it within the caps (ADR-10).
+
+    Only a RESOLVED branch spawns children (grounding-as-precondition, one level up);
+    ABANDONED/INCONCLUSIVE are leaves. Recursion stops at max_depth, when the node
+    budget is exhausted, or when the follow-up proposer returns nothing (semantic
+    stop). Auto-expands: the human steered once, at the root."""
+    if budget is None:
+        budget = ExpansionBudget(max_total_branches=7)
+
+    _investigate(branch, flag, generator, registry, judge, system=system)
+    budget.spend()
+
+    # Leaf conditions — any one makes this a leaf (no children).
+    if branch.status is not BranchStatus.RESOLVED:      # only build on a grounded, resolved foundation
+        return branch
+    if branch.depth >= max_depth:                        # hard cap: depth
+        return branch
+    if budget.remaining() <= 0:                          # hard cap: global node budget
+        return branch
+
+    children = _propose(generator, flag, branch, breadth)  # semantic: may be empty → leaf
+    for child in children:
+        if budget.remaining() <= 0:                      # re-check before each spend
+            break
+        branch.children.append(child)
+        expand(
+            child, flag, generator, registry, judge,
+            system=system, max_depth=max_depth, budget=budget, breadth=breadth,
+            _investigate=_investigate, _propose=_propose,
+        )
     return branch

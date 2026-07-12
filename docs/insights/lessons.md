@@ -268,3 +268,28 @@ the lesson body. Chronological order.
   'the backend.' Any singleton called 'the X' is a silent bet there'll only ever be
   one X. The fix both times: route by an id the data already carries. When you name
   something 'the,' ask what the second one does to you."
+
+## 2026-07-12 — The recursion needed the same brake I'd already built for the loop
+
+- Situation: Phase 4 — letting a resolved branch spawn deeper child branches, so the
+  investigation graph grows into a tree. Asked "what stops the recursion?", the
+  instinct was: it stops when no branch raises a new question.
+- What that misses: that's a purely SEMANTIC stop — "trust the system to run out of
+  questions" — which is the exact bet ADR-1 rejected for the single loop. A chain
+  can plausibly emit "one more question" forever. And at the graph level it's WORSE:
+  growth is exponential (breadth^depth), not linear, so an unbounded tree is a cost
+  bomb, not a slow leak. I'd literally debugged the independent-caps version of this
+  two phases earlier (don't SUM the two budgets) — and nearly reproduced the missing
+  half one level up.
+- Lesson: termination conditions don't automatically inherit when you add a level of
+  recursion — you have to consciously transfer them. The loop's pattern (semantic
+  stop + an INDEPENDENT hard cap that guarantees it ends at all) is exactly what the
+  graph needs, just renamed: semantic = "no new questions proposed," hard =
+  max_depth AND a global node budget, each its own ceiling. Same shape, one level up.
+  And the grounding-as-precondition rule transfers too: only a RESOLVED branch spawns
+  children — you don't build a deeper investigation on a foundation you couldn't
+  ground (extending an ABANDONED branch is ADR-1's "loop on ungrounded output" again).
+- Post angle: "I built a careful termination condition for my agent's loop — semantic
+  stop plus a hard budget cap. Then I added recursion on top and almost forgot: the
+  recursion needs its OWN brake. Termination doesn't inherit when you add a level.
+  And a tree explodes exponentially, so the hard cap matters more, not less."

@@ -140,7 +140,13 @@
 >   valuation-allowance reversal); comparable on the other 4. Lean: **Opus for the
 >   batch** (steering surface = product front door; Opus edge on the subtlest flags,
 >   where disambiguation matters most; cost still <~$40). Sonnet defensible to halve
->   cost. **PENDING: Sheldon picks the batch model, then run `--full-refresh`.**
+>   cost. Fable go/no-go re-review → **GO-OPUS** (verified all batch-blockers fixed in code).
+> - **BATCH RUN COMPLETE (2026-07-13).** `investigation_branches` LIVE in prod BQ:
+>   520/520 filings, 0 failures, 2080 branch rows (4/filing), 71 tickers,
+>   model=claude-opus-4-8, prompt_version=v1. ~1.1M tokens, **~$16.30**. Ran via
+>   in-process thread pool (concurrency 8, ~25 min) with per-checkpoint usage logging
+>   (#15). Spot-checked: distinct analyst-grade hypotheses, question-predicates,
+>   status='proposed'. This is the disambiguation surface the redink-ui service consumes.
 > - **#4 FIXED (ADR-14):** fiscal year-end (10-K) skip — keep 10-Q-only comparison,
 >   count + surface `periods_skipped`/`fiscal_periods_skipped`. Verified live. 72 tests.
 > - **Deferred cleanups DONE (2026-07-12):** #11 recursive `graph.get`, #6

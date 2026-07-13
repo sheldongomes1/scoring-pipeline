@@ -176,8 +176,17 @@ class Judge:
         deterministic_failure = False
 
         # Head 1 — INTEGRITY: replay the exact request and compare. No model call.
+        # Dedupe by re-fetch identity first (audit #12): the same fact accumulates in
+        # `evidence` across continue/repair cycles, and re-verifying it N times is
+        # wasted work + BQ cost (each fetch pulls the ticker's whole history). A
+        # duplicate has identical identity → identical result, so verifying once suffices.
+        seen: set = set()
         for item in deterministic:
             prov = item.provenance
+            identity = (prov.source, prov.ticker, prov.requested_report_date, prov.requested_offset, item.feature)
+            if identity in seen:
+                continue
+            seen.add(identity)
             backend = self._backend_for(item)
             if backend is None:
                 failed.append(f"{item.feature}@{prov.resolved_report_date} (no reverify backend for {prov.source!r})")
@@ -270,9 +279,12 @@ class Judge:
             None,
         )
         if payload is None:
-            # The judge failing to grade is itself a grounding-style failure of the
-            # judgment step — treat as unresolved+open so the loop doesn't stop clean.
-            return JudgeVerdict(True, Confirm.INDETERMINATE, True, "judge produced no verdict")
+            # Audit #10 — FAIL CLOSED. A broken judge response (no grade) must not
+            # `open_questions=True` and loop: that burns the whole budget rubber-
+            # stamping a non-functioning judge until CAP_REACHED. Terminate clean as
+            # INDETERMINATE with no open questions → the loop stops INCONCLUSIVE, an
+            # honest "the judge couldn't decide," rather than spinning.
+            return JudgeVerdict(True, Confirm.INDETERMINATE, False, "judge produced no verdict")
         return JudgeVerdict(
             grounded=True,
             confirm=Confirm(payload["confirm"]),

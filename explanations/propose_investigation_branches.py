@@ -130,8 +130,10 @@ def load_flags(client: bigquery.Client, ticker: str | None, limit: int | None,
     """Flagged filings (ALERT/FLAG) + their key_question, incremental by default."""
     tiers = ", ".join(f"'{t}'" for t in TARGET_TIERS)
     conds = [f"fi.conviction_tier IN ({tiers})"]
+    params: list = []
     if ticker:
-        conds.append(f"fi.ticker = '{ticker}'")
+        conds.append("fi.ticker = @ticker")   # audit #14: parameterized, not interpolated
+        params.append(bigquery.ScalarQueryParameter("ticker", "STRING", ticker))
     # Incremental only when the output table already exists (first run has nothing
     # to diff against — the NOT EXISTS would query a non-existent table).
     if not full_refresh and not ticker and _table_exists(client, OUTPUT_TABLE):
@@ -155,7 +157,8 @@ def load_flags(client: bigquery.Client, ticker: str | None, limit: int | None,
         ORDER BY fi.anomaly_score_0_100 DESC
         {lim}
     """
-    return client.query(query).to_dataframe()
+    job_config = bigquery.QueryJobConfig(query_parameters=params) if params else None
+    return client.query(query, job_config=job_config).to_dataframe()
 
 
 def _upload(client: bigquery.Client, rows: list[dict], truncate: bool) -> None:

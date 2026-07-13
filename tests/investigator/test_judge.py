@@ -291,6 +291,34 @@ def test_answer_support_catches_numeric_hallucination_numbers_only():
     assert "0.55" in failed[0]
 
 
+def test_grounding_dedupes_repeated_evidence():
+    """audit #12: the same fact appearing twice in evidence is re-verified ONCE."""
+    calls = []
+    def counting(ticker, rd, off, feats):
+        calls.append((ticker, rd, off, tuple(feats)))
+        return feature_history_fake(ticker, rd, off, feats)
+    ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
+    grounded, failed, _ = Judge(client=None, reverify=counting)._check_grounding(ev + ev)  # duped
+    assert grounded is True
+    assert len(calls) == 1            # verified once despite the duplicate
+
+
+def test_judge_no_payload_fails_closed():
+    """audit #10: a broken C/O grade (no tool payload) terminates INCONCLUSIVE with
+    open_questions=False — it does NOT loop the budget away rubber-stamping."""
+    ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
+    client = ScriptedClient([
+        _Response("tool_use", [_ToolUseBlock("g", "submit_grounding",
+            {"supported": True, "unsupported_claims": [], "reasoning": "ok"})]),  # answer-support passes
+        _Response("end_turn", [_TextBlock("no tool call this time")]),            # C/O grade: no payload
+    ])
+    v = Judge(client=client, reverify=feature_history_fake).evaluate(
+        "did it recover?", "recovered to 0.95", ev)
+    assert v.grounded is True
+    assert v.confirm is Confirm.INDETERMINATE
+    assert v.open_questions is False   # fail-closed — stop, don't spin
+
+
 def test_no_judge_preserves_model_stopped():
     """Regression: with no judge injected, ADR-4 behaviour is unchanged."""
     client = ScriptedClient([_end_turn("done")])

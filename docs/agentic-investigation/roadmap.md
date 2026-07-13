@@ -178,9 +178,23 @@
 >   `period_features` — the real-BQ deep-dive 400'd until Fable intersected the enum
 >   with the live schema. Fix upstream (regenerate feature_keys.json / add columns);
 >   anything trusting feature_keys.json vs real BQ is exposed. [[known_gaps]].
-> - **After 5b:** Phase 6 eval in qqq-eval-suite (independent grounding judge =
->   Fable; ~12-investigation sample), then the last 3 hygiene items. Interview
->   deferred until live in prod.
+> - **AUDIT FULLY CLOSED (2026-07-13).** All 15 Fable findings resolved: #10 judge
+>   fail-closed, #12 evidence dedupe, #14 param `--ticker` SQL (the last 3 hygiene),
+>   each with a regression test. 78 investigator tests.
+> - **DATA DRIFT FIXED:** `output/feature_keys.json` corrected to the 8 columns that
+>   actually exist in prod `period_features` (dropped phantom `ocf_to_assets`/
+>   `equity_multiplier`); all 8 verified to query real BQ clean. Open upstream Q
+>   (were they dropped from the table? trend z-cols still reference them) logged in
+>   [[known_gaps]].
+> - **PHASE 6 EVAL BUILT (in progress).** `scoring-pipeline/scripts/eval_capture_investigations.py`
+>   (harness: runs a sample of live investigations → outputs JSON) +
+>   `qqq-eval-suite/evals/investigator_evals.py` (Layer-1 deterministic: terminal
+>   state / evidence present / latency; Layer-2 INDEPENDENT judge = **Fable**
+>   `claude-fable-5`, decorrelated from the system's Opus/Sonnet — grades grounded +
+>   answers-key_question; PASS/FAIL/ABSTAIN per eval_schema). Running a 6-ticker
+>   sample (PANW/INSM/STX/VRSK/APP/FTNT) live; scores pending.
+> - **After Phase 6:** deploy 5b (user's Cloud Run step); interview deferred until
+>   live in prod.
 
 ---
 

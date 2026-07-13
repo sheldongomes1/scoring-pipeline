@@ -31,11 +31,11 @@ Status legend: **FIXED** (ADR-13 / same-day) · **DEFERRED** (tracked, with rati
 
 | # | Finding | Status |
 |---|---------|--------|
-| 10 | Judge no-payload response fabricates `grounded=True` (wrong failure direction). | **DEFERRED** — low prob (`tool_choice` forced); make the fallback fail closed. |
+| 10 | Judge no-payload response fabricates `grounded=True` (wrong failure direction). | **FIXED** — fallback now fails closed (`open_questions=False` → stop INCONCLUSIVE, no budget spin). Regression test. |
 | 11 | `InvestigationGraph.get` bare `next()` raises + searches only top-level (misses `h2.1`). | **FIXED** — recursive tree search (`_find_branch`) + clear `KeyError` on miss. Regression test. |
-| 12 | Reverify cost O(evidence × evaluations); each bq call pulls full history; duplicate evidence re-verified. | **DEFERRED** — dedupe evidence by `(source, ticker, date, feature)`. |
+| 12 | Reverify cost O(evidence × evaluations); each bq call pulls full history; duplicate evidence re-verified. | **FIXED** — dedupe by `(source, ticker, requested_date, requested_offset, feature)` before re-fetch. Regression test. |
 | 13 | Stale pre-ADR-9 fixture source name in `test_judge.py`. | **FIXED** — updated to the logical source. |
-| 14 | `load_flags` interpolates `--ticker` into SQL (inconsistent with parameterized queries). | **DEFERRED** — parameterize (low risk: not user-facing input). |
+| 14 | `load_flags` interpolates `--ticker` into SQL (inconsistent with parameterized queries). | **FIXED** — parameterized `@ticker`. |
 | 15 | No observability: no token/usage logging; batch transcripts not persisted. | **FIXED** — `propose_branches(return_usage=True)`; Step 10 logs running token in/out + est. $ per checkpoint and at end. (Batch also gained `--concurrency` thread-pool + `_cost` estimate.) |
 
 ## What the audit affirmed as sound

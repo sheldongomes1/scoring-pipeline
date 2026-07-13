@@ -117,6 +117,7 @@ def run_investigation(
     repairs = 0
     turns = 0
     last_answer = ""
+    last_verdict = None   # audit #6: preserve the most recent judge verdict for CAP_REACHED
     # ADR-1's two caps are INDEPENDENT, not additive: investigation_cap bounds
     # total model turns (the backstop against any runaway, incl. propose<->continue
     # with no gathering); repair_cap is a SEPARATE sub-ceiling that trips ABANDONED
@@ -171,6 +172,7 @@ def run_investigation(
 
         # ADR-6: the judge adjudicates the proposal. Grounding (G) gates first.
         verdict: JudgeVerdict = judge.evaluate(predicate or task, last_answer, evidence)
+        last_verdict = verdict
 
         if not verdict.grounded:
             # ADR-13: an INTEGRITY failure (re-fetch mismatch / missing backend) is a
@@ -208,6 +210,7 @@ def run_investigation(
         )
 
     # Turn ceiling hit before any terminal verdict — a real terminal state, not an error.
+    # Carry the last judge verdict if one exists (audit #6: don't drop it).
     return TerminalResult(
-        TerminalReason.CAP_REACHED, turns, last_answer, tool_calls, messages, evidence
+        TerminalReason.CAP_REACHED, turns, last_answer, tool_calls, messages, evidence, last_verdict
     )

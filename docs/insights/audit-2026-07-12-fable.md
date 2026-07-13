@@ -21,8 +21,8 @@ Status legend: **FIXED** (ADR-13 / same-day) · **DEFERRED** (tracked, with rati
 | # | Finding | Status |
 |---|---------|--------|
 | 4 | 10-Q-only positional offset silently skips the fiscal Q4 (it's a 10-K) → "+1" from fiscal Q3 lands ~6 months later. A CFA would reject this. | **FIXED** — ADR-14: keep 10-Q-only comparison (annual 10-K figures aren't quarterly-comparable; ratio can't be de-annualized), but count + surface `periods_skipped`/`fiscal_periods_skipped`. Verified live (AAPL Jun+1 → skips 1). Note: the gold-standard derive-true-Q4 fix stays deferred (needs raw flows). |
-| 5 | `expand()` is depth-first over a shared budget → first-child starvation; sibling order is arbitrary LLM emission; dropped children vanish silently. | **DEFERRED** — conceded (breadth-first is better). Fix = frontier expansion + record budget-capped children as PROPOSED. Interactive-service quality. |
-| 6 | `CAP_REACHED` laundered into `INCONCLUSIVE`; the last verdict is dropped on that path. | **DEFERRED** — fix = distinct `BranchStatus`/`capped` flag + carry the verdict. Low risk. |
+| 5 | `expand()` is depth-first over a shared budget → first-child starvation; sibling order is arbitrary LLM emission; dropped children vanish silently. | **FIXED** — `expand` rewritten breadth-first (level-by-level frontier); budget-capped children attached as PROPOSED, not dropped. 2 regression tests. |
+| 6 | `CAP_REACHED` laundered into `INCONCLUSIVE`; the last verdict is dropped on that path. | **FIXED** — new `BranchStatus.CAPPED`; `_STATUS_FROM_REASON` maps CAP_REACHED→CAPPED; loop carries `last_verdict` on the CAP path. Regression test. |
 | 7 | Step 10 all-or-nothing: one API error at filing #500 loses 499. | **FIXED** — per-filing try/except + flush every 25 + incremental resume. (Message Batches API = future optimization, noted.) |
 | 8 | Idempotency: `--ticker` skips incremental + `WRITE_APPEND` → duplicate rows; no `prompt_version`; zero-hypothesis filings silently retried. | **FIXED** (first two) — `--ticker` delete-then-append; `prompt_version` column. Zero-hypothesis: logged + retried (rare; **DEFERRED** enforcing ≥1 in the schema). |
 | 9 | Sonnet proposer never A/B'd vs the Opus tier `graph.py` prescribes; batch context is thin. | **PARTIAL** — `--model` flag added for A/B. **ACTION BEFORE BATCH:** run `--limit 15` Sonnet vs Opus, hand-review distinctness / predicate-not-method / plausibility, freeze the prompt, then run 520. |
@@ -32,7 +32,7 @@ Status legend: **FIXED** (ADR-13 / same-day) · **DEFERRED** (tracked, with rati
 | # | Finding | Status |
 |---|---------|--------|
 | 10 | Judge no-payload response fabricates `grounded=True` (wrong failure direction). | **DEFERRED** — low prob (`tool_choice` forced); make the fallback fail closed. |
-| 11 | `InvestigationGraph.get` bare `next()` raises + searches only top-level (misses `h2.1`). | **DEFERRED** — recursive lookup + default. |
+| 11 | `InvestigationGraph.get` bare `next()` raises + searches only top-level (misses `h2.1`). | **FIXED** — recursive tree search (`_find_branch`) + clear `KeyError` on miss. Regression test. |
 | 12 | Reverify cost O(evidence × evaluations); each bq call pulls full history; duplicate evidence re-verified. | **DEFERRED** — dedupe evidence by `(source, ticker, date, feature)`. |
 | 13 | Stale pre-ADR-9 fixture source name in `test_judge.py`. | **FIXED** — updated to the logical source. |
 | 14 | `load_flags` interpolates `--ticker` into SQL (inconsistent with parameterized queries). | **DEFERRED** — parameterize (low risk: not user-facing input). |

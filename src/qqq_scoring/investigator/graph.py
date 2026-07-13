@@ -36,9 +36,11 @@ PROPOSER_MODEL = DEFAULT_MODEL
 class BranchStatus(str, Enum):
     PROPOSED = "proposed"            # named, not yet investigated (the steering state)
     INVESTIGATING = "investigating"  # the loop is running on this branch
-    RESOLVED = "resolved"            # investigated → judge resolved
-    INCONCLUSIVE = "inconclusive"    # investigated → clean but ambiguous / cap reached
-    ABANDONED = "abandoned"          # investigated → grounding failed past repair_cap
+    RESOLVED = "resolved"            # investigated → judge confirmed OR refuted
+    INCONCLUSIVE = "inconclusive"    # investigated → grounded, clean, but genuinely ambiguous
+    CAPPED = "capped"                # investigated → ran out of turn budget mid-gathering
+    #                                  (NOT the same as a clean 'inconclusive' — audit #6)
+    ABANDONED = "abandoned"          # investigated → grounding failed / integrity failure
 
 
 @dataclass
@@ -73,7 +75,23 @@ class InvestigationGraph:
     branches: list[Branch] = field(default_factory=list)
 
     def get(self, branch_id: str) -> Branch:
-        return next(b for b in self.branches if b.id == branch_id)
+        """Find a branch anywhere in the TREE by id (audit #11 — recurses into
+        children so `h2.1` is reachable; raises a clear KeyError if absent, not
+        a bare StopIteration)."""
+        found = _find_branch(self.branches, branch_id)
+        if found is None:
+            raise KeyError(f"no branch {branch_id!r} in graph")
+        return found
+
+
+def _find_branch(branches: list["Branch"], branch_id: str) -> "Branch | None":
+    for b in branches:
+        if b.id == branch_id:
+            return b
+        hit = _find_branch(b.children, branch_id)
+        if hit is not None:
+            return hit
+    return None
 
 
 def _proposer_tool(n: int) -> dict:
@@ -150,7 +168,7 @@ _STATUS_FROM_REASON = {
     TerminalReason.RESOLVED: BranchStatus.RESOLVED,
     TerminalReason.INCONCLUSIVE: BranchStatus.INCONCLUSIVE,
     TerminalReason.ABANDONED: BranchStatus.ABANDONED,
-    TerminalReason.CAP_REACHED: BranchStatus.INCONCLUSIVE,  # ran out of budget → ambiguous
+    TerminalReason.CAP_REACHED: BranchStatus.CAPPED,       # budget-exhausted ≠ ambiguous (audit #6)
     TerminalReason.MODEL_STOPPED: BranchStatus.INCONCLUSIVE,  # shouldn't occur with a judge
 }
 
@@ -255,34 +273,38 @@ def expand(
     _investigate=run_branch,   # injectable so the tree-control logic is unit-testable
     _propose=propose_children,  # without any LLM (defaults call the real thing)
 ) -> Branch:
-    """Investigate `branch`, then recursively expand it within the caps (ADR-10).
+    """Investigate `branch`, then expand it BREADTH-FIRST within the caps (ADR-10, #5).
 
-    Only a RESOLVED branch spawns children (grounding-as-precondition, one level up);
-    ABANDONED/INCONCLUSIVE are leaves. Recursion stops at max_depth, when the node
-    budget is exhausted, or when the follow-up proposer returns nothing (semantic
-    stop). Auto-expands: the human steered once, at the root."""
+    Breadth-first (a level-by-level frontier), not depth-first: all siblings at a
+    level are investigated before descending, so a shared node budget doesn't let
+    the first hypothesis's subtree starve its siblings (whose order is arbitrary LLM
+    emission). Only a RESOLVED branch spawns children (grounding-as-precondition, one
+    level up); ABANDONED/INCONCLUSIVE/CAPPED are leaves. Stops at max_depth, when the
+    node budget is exhausted (budget-capped children are recorded as PROPOSED, not
+    dropped — audit #5), or when the proposer returns nothing (semantic stop)."""
     if budget is None:
         budget = ExpansionBudget(max_total_branches=7)
 
     _investigate(branch, flag, generator, registry, judge, system=system)
     budget.spend()
 
-    # Leaf conditions — any one makes this a leaf (no children).
-    if branch.status is not BranchStatus.RESOLVED:      # only build on a grounded, resolved foundation
-        return branch
-    if branch.depth >= max_depth:                        # hard cap: depth
-        return branch
-    if budget.remaining() <= 0:                          # hard cap: global node budget
-        return branch
-
-    children = _propose(generator, flag, branch, breadth)  # semantic: may be empty → leaf
-    for child in children:
-        if budget.remaining() <= 0:                      # re-check before each spend
-            break
-        branch.children.append(child)
-        expand(
-            child, flag, generator, registry, judge,
-            system=system, max_depth=max_depth, budget=budget, breadth=breadth,
-            _investigate=_investigate, _propose=_propose,
-        )
+    frontier = [branch]                                  # nodes whose children we may expand
+    while frontier:
+        next_frontier = []
+        for node in frontier:
+            if node.status is not BranchStatus.RESOLVED:  # only a resolved foundation spawns
+                continue
+            if node.depth >= max_depth:                   # hard cap: depth
+                continue
+            if budget.remaining() <= 0:                   # no budget to investigate any child → don't propose
+                continue
+            for child in _propose(generator, flag, node, breadth):  # semantic: [] → leaf
+                node.children.append(child)               # attach ALL proposed children...
+                if budget.remaining() > 0:                # ...but only investigate within budget
+                    _investigate(child, flag, generator, registry, judge, system=system)
+                    budget.spend()
+                    next_frontier.append(child)
+                # else: child stays PROPOSED — budget-capped, recorded so the UI can
+                # render "expansion stopped here" rather than silently vanishing.
+        frontier = next_frontier
     return branch

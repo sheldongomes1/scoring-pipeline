@@ -238,6 +238,55 @@ def test_propose_children_ids_encode_lineage():
     assert children[0].depth == 1
 
 
+# --- audit #11: recursive graph.get -----------------------------------------
+
+
+def test_get_finds_nested_branch_and_raises_on_missing():
+    root = Branch("h2", "hyp", "why", "pred?", depth=0)
+    root.children.append(Branch("h2.1", "c", "cw", "cp?", depth=1))
+    graph = InvestigationGraph(flag=_flag(), branches=[root])
+    assert graph.get("h2.1").id == "h2.1"     # recurses into the tree (was top-level only)
+    try:
+        graph.get("nope")
+    except KeyError:
+        return
+    raise AssertionError("get() of a missing id should raise KeyError, not StopIteration")
+
+
+# --- audit #6: CAP_REACHED is CAPPED (not INCONCLUSIVE) + verdict carried ----
+
+
+def test_capped_branch_is_distinct_and_carries_verdict():
+    from qqq_scoring.investigator.judge import Confirm
+    client = ScriptedClient([_Response("end_turn", [_TextBlock("prelim")])])   # auto-repeats last turn
+    open_forever = JudgeVerdict(True, Confirm.INDETERMINATE, True, "still open")
+    branch = Branch("h1", "hyp", "why", "pred?", depth=0)
+    run_branch(branch, _flag(), client, _registry(), FakeJudge(open_forever))   # never resolves → ceiling
+    assert branch.result.reason is TerminalReason.CAP_REACHED
+    assert branch.status is BranchStatus.CAPPED           # NOT laundered into INCONCLUSIVE
+    assert branch.result.verdict is not None              # last verdict preserved, not dropped
+
+
+# --- audit #5: breadth-first expansion doesn't starve siblings --------------
+
+
+def test_breadth_first_investigates_siblings_before_descending():
+    tree = expand(_root(), _flag(), None, _registry(), None,
+                  max_depth=3, budget=ExpansionBudget(3), breadth=2,
+                  _investigate=_fake_investigate(), _propose=_fake_propose(2))
+    assert len(tree.children) == 2                        # both level-1 siblings investigated
+    assert all(c.status is BranchStatus.RESOLVED for c in tree.children)
+    assert _max_depth(tree) == 1                          # budget spent on breadth, not one deep chain
+
+
+def test_budget_capped_children_recorded_as_proposed():
+    tree = expand(_root(), _flag(), None, _registry(), None,
+                  max_depth=3, budget=ExpansionBudget(2), breadth=2,
+                  _investigate=_fake_investigate(), _propose=_fake_propose(2))
+    assert len(tree.children) == 2                        # attached, not dropped...
+    assert sorted(c.status.value for c in tree.children) == ["proposed", "resolved"]  # ...one budget-capped
+
+
 def _run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for t in tests:

@@ -143,9 +143,13 @@
 >   cost. **PENDING: Sheldon picks the batch model, then run `--full-refresh`.**
 > - **#4 FIXED (ADR-14):** fiscal year-end (10-K) skip — keep 10-Q-only comparison,
 >   count + surface `periods_skipped`/`fiscal_periods_skipped`. Verified live. 72 tests.
+> - **Deferred cleanups DONE (2026-07-12):** #11 recursive `graph.get`, #6
+>   CAP_REACHED→new `BranchStatus.CAPPED` + verdict carried, #5 breadth-first
+>   `expand` (no sibling starvation; budget-capped children kept as PROPOSED). 76
+>   tests. Only low-risk hygiene remains deferred: #10 judge no-payload fail-closed,
+>   #12 evidence-dedupe, #14 parameterize `--ticker` SQL, #15 usage logging.
 > - **After the batch:** redink-ui interactive service (steer + deep-dive); Phase 6
->   eval in qqq-eval-suite. Remaining deferred audit items: #5 breadth-first, #6
->   CAP→INCONCLUSIVE, #10–12/#14–15 hygiene. Interview deferred until live in prod.
+>   eval in qqq-eval-suite. Interview deferred until live in prod.
 
 ---
 

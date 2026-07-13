@@ -898,3 +898,43 @@ claim applies only to the first.
   10-K skip, #5 breadth-first expansion, #6 CAP_REACHED→INCONCLUSIVE laundering,
   #10–12/#14–15 hygiene. None block the batch; #4–6 are quality items for the
   interactive service.
+
+---
+
+## ADR-14: Fiscal year-end (10-K) handling in positional offsets — expose the skip
+
+**Date:** 2026-07-12
+**Status:** Accepted (resolves audit #4)
+
+**Context:** ADR-12's positional offset indexes over 10-Qs only. Real data
+(`period_features`) confirms the CFA hazard: a company files 3 10-Qs/year plus an
+annual 10-K whose `target_period_end` sits *between* two 10-Qs (AAPL: Jun 10-Q →
+Sep 10-K → Dec 10-Q). So "+1" from fiscal Q3 lands on the next 10-Q ~6 months later,
+silently skipping the fiscal year-end — exactly where a persistence anomaly may
+resolve or blow up.
+
+**Decision — keep the 10-Q-only comparison, but EXPOSE the skip.** The data forces
+this: the 10-K row's figures are ANNUAL (AAPL `ocf_to_net_income` ≈ 1.0 vs quarterly
+0.8–4.3), so including the 10-K in the offset sequence would compare a quarterly
+value to an annual one — a fake "collapse" from a time-base switch. And the true fix
+(derive a Q4 *quarterly* figure = annual − Q1−Q2−Q3) is blocked: `period_features`
+carries the engineered *ratio*, which is not additive, so it cannot be de-annualized
+without raw flows. Therefore: resolve the offset over 10-Qs only (time-base
+consistent), AND count the 10-K periods strictly between the anchor and the resolved
+quarter, surfaced as `periods_skipped` on the result and `fiscal_periods_skipped` in
+the model-facing content when > 0. The model is told "this jump crossed a fiscal
+year-end," instead of silently reading a 6-month gap as two adjacent quarters.
+
+**Alternatives considered:**
+- *Include 10-K rows in the positional sequence* — rejected: mixes annual and
+  quarterly time bases → a spurious deterioration signal.
+- *Derive a true Q4 quarterly figure (annual − Q1−Q2−Q3)* — deferred: needs raw
+  flow components; `period_features` has non-additive ratios. Revisit if raw flows
+  land upstream (the gold-standard fix).
+
+**Consequences:**
+- `FeatureResult` gains `periods_skipped: int = 0`; `feature_history_bq` queries
+  both forms, indexes over 10-Qs, counts skipped 10-Ks; `feature_history.to_model_content`
+  emits `fiscal_periods_skipped` when > 0. Fakes keep tidy calendars → 0.
+- Verified live (AAPL Jun 10-Q +1 → resolved Dec 10-Q, value 1.28 quarterly not the
+  1.00 annual, `periods_skipped=1`). 2 regression tests. 72 tests total.

@@ -20,7 +20,7 @@ Status legend: **FIXED** (ADR-13 / same-day) · **DEFERRED** (tracked, with rati
 
 | # | Finding | Status |
 |---|---------|--------|
-| 4 | 10-Q-only positional offset silently skips the fiscal Q4 (it's a 10-K) → "+1" from fiscal Q3 lands ~6 months later. A CFA would reject this. | **DEFERRED** — real methodology gap; fix = include 10-K periods in the ordered history or expose `periods_skipped`. Quality item for the interactive deep-dive, not the batch. |
+| 4 | 10-Q-only positional offset silently skips the fiscal Q4 (it's a 10-K) → "+1" from fiscal Q3 lands ~6 months later. A CFA would reject this. | **FIXED** — ADR-14: keep 10-Q-only comparison (annual 10-K figures aren't quarterly-comparable; ratio can't be de-annualized), but count + surface `periods_skipped`/`fiscal_periods_skipped`. Verified live (AAPL Jun+1 → skips 1). Note: the gold-standard derive-true-Q4 fix stays deferred (needs raw flows). |
 | 5 | `expand()` is depth-first over a shared budget → first-child starvation; sibling order is arbitrary LLM emission; dropped children vanish silently. | **DEFERRED** — conceded (breadth-first is better). Fix = frontier expansion + record budget-capped children as PROPOSED. Interactive-service quality. |
 | 6 | `CAP_REACHED` laundered into `INCONCLUSIVE`; the last verdict is dropped on that path. | **DEFERRED** — fix = distinct `BranchStatus`/`capped` flag + carry the verdict. Low risk. |
 | 7 | Step 10 all-or-nothing: one API error at filing #500 loses 499. | **FIXED** — per-filing try/except + flush every 25 + incremental resume. (Message Batches API = future optimization, noted.) |

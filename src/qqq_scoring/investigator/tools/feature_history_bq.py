@@ -44,9 +44,12 @@ def feature_history_bq(
 
     client = client or bigquery.Client()
     cols = ", ".join(_quote_ident(f) for f in features)
+    # Pull BOTH quarterly (10-Q) and annual (10-K) filings so we can (a) index the
+    # offset over 10-Qs only — annual figures aren't quarterly-comparable — and
+    # (b) count the fiscal year-end filings the jump skipped (ADR-14).
     sql = (
-        f"SELECT target_period_end, {cols} FROM `{_TABLE}` "
-        f"WHERE ticker=@ticker AND target_form=@form "
+        f"SELECT target_period_end, target_form, {cols} FROM `{_TABLE}` "
+        f"WHERE ticker=@ticker AND target_form IN (@form, '10-K') "
         f"ORDER BY target_period_end"
     )
     job = client.query(
@@ -61,15 +64,23 @@ def feature_history_bq(
     rows = list(job)
     retrieved_at = datetime.now(timezone.utc)
 
-    # Positional resolution: find the anchor in the ticker's filed history, offset by index.
-    periods = [r["target_period_end"] for r in rows]
+    # Positional resolution over the QUARTERLY rows only (time-base consistency).
+    q_rows = [r for r in rows if r["target_form"] == form]
+    annual_dates = [r["target_period_end"] for r in rows if r["target_form"] == "10-K"]
+    periods = [r["target_period_end"] for r in q_rows]
     resolved: date | None = None
     if report_date in periods:
         idx = periods.index(report_date) + period_offset
         if 0 <= idx < len(periods):
             resolved = periods[idx]
 
-    row = rows[periods.index(resolved)] if resolved in periods else None
+    # Count fiscal year-end (10-K) periods strictly between anchor and resolved (ADR-14).
+    periods_skipped = 0
+    if resolved is not None:
+        lo, hi = sorted((report_date, resolved))
+        periods_skipped = sum(1 for d in annual_dates if lo < d < hi)
+
+    row = q_rows[periods.index(resolved)] if resolved in periods else None
 
     results: list[FeatureResult] = []
     for feature in features:
@@ -92,7 +103,7 @@ def feature_history_bq(
             continue
         value = row[feature]
         if value is None:
-            results.append(FeatureResult(feature, FeatureStatus.FEATURE_MISSING, None, prov))
+            results.append(FeatureResult(feature, FeatureStatus.FEATURE_MISSING, None, prov, periods_skipped=periods_skipped))
         else:
-            results.append(FeatureResult(feature, FeatureStatus.FOUND, float(value), prov))
+            results.append(FeatureResult(feature, FeatureStatus.FOUND, float(value), prov, periods_skipped=periods_skipped))
     return results

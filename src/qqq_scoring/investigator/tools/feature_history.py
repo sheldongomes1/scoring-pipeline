@@ -130,14 +130,17 @@ def to_model_content(results: list[FeatureResult]) -> str:
     receipt it never used and *looking* grounded: the only way its answer can
     match the paper trail is if it actually used the real value.
     """
-    return json.dumps(
-        [
-            {
-                "feature": r.feature,
-                "status": r.status.value,
-                "value": r.value,
-                "resolved_report_date": r.provenance.resolved_report_date.isoformat(),
-            }
-            for r in results
-        ]
-    )
+    out = []
+    for r in results:
+        item = {
+            "feature": r.feature,
+            "status": r.status.value,
+            "value": r.value,
+            "resolved_report_date": r.provenance.resolved_report_date.isoformat(),
+        }
+        # ADR-14: warn the model the jump crossed a fiscal year-end (a 10-K sits
+        # between), so it doesn't read a ~6-month gap as two adjacent quarters.
+        if getattr(r, "periods_skipped", 0):
+            item["fiscal_periods_skipped"] = r.periods_skipped
+        out.append(item)
+    return json.dumps(out)

@@ -134,12 +134,18 @@
 >   - **DEFERRED (tracked):** #4 fiscal-Q4/10-K skip, #5 breadth-first expand, #6
 >     CAP→INCONCLUSIVE, #10–12/#14–15 hygiene — none block the batch; #4–6 are
 >     interactive-service quality.
-> - **GATE before the 520-call batch (audit #9):** run
->   `propose_investigation_branches.py --limit 15` with Sonnet AND Opus, hand-review
->   hypothesis distinctness / predicate-not-method / plausibility, freeze the prompt,
->   THEN run the full 520 (`--full-refresh` after any prompt change). Cost ~$3–8; the
->   issue is proposal quality on the thin batch context, not cost.
-> - **After (c):** Phase 6 eval in qqq-eval-suite. Interview deferred until live in prod.
+> - **AUDIT #9 GATE — A/B DONE (2026-07-12).** Ran Sonnet-5 vs Opus-4-8 proposer on 5
+>   flags (print-only, no BQ write). Both analyst-grade, distinct, correct predicate
+>   format. Opus caught a real subtle cause Sonnet missed (PANW deferred-tax-asset
+>   valuation-allowance reversal); comparable on the other 4. Lean: **Opus for the
+>   batch** (steering surface = product front door; Opus edge on the subtlest flags,
+>   where disambiguation matters most; cost still <~$40). Sonnet defensible to halve
+>   cost. **PENDING: Sheldon picks the batch model, then run `--full-refresh`.**
+> - **#4 FIXED (ADR-14):** fiscal year-end (10-K) skip — keep 10-Q-only comparison,
+>   count + surface `periods_skipped`/`fiscal_periods_skipped`. Verified live. 72 tests.
+> - **After the batch:** redink-ui interactive service (steer + deep-dive); Phase 6
+>   eval in qqq-eval-suite. Remaining deferred audit items: #5 breadth-first, #6
+>   CAP→INCONCLUSIVE, #10–12/#14–15 hygiene. Interview deferred until live in prod.
 
 ---
 

@@ -79,6 +79,13 @@ class FeatureResult:
     value: float | None       # populated iff status is FOUND
     provenance: Provenance
     grounding_mode: GroundingMode = GroundingMode.DETERMINISTIC  # ADR-7: verify by re-fetch + ==
+    periods_skipped: int = 0  # ADR-14: fiscal year-end (10-K/annual) periods that fall
+    #                           BETWEEN the anchor and the resolved 10-Q. >0 warns the
+    #                           model the offset spanned a fiscal year-end, so a ~6-month
+    #                           jump is NOT two adjacent quarters. The comparison stays
+    #                           10-Q-only (annual figures aren't quarterly-comparable, and
+    #                           the ratio can't be de-annualized); the skip is EXPOSED,
+    #                           not silently mixed in.
 
     def __post_init__(self) -> None:
         # Enforce ADR-2 principle 2 at run-time, not just by convention: value is

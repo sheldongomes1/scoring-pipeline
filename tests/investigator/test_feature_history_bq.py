@@ -27,11 +27,13 @@ class _FakeBQ:
         return list(self._rows)
 
 
-# AAPL's real irregular fiscal 10-Q calendar (no September quarter — the whole point).
+# AAPL's real irregular fiscal calendar: 3 10-Qs/year with the fiscal year-end 10-K
+# (annual) sitting BETWEEN the June 10-Q and the December 10-Q (ADR-14).
 _ROWS = [
-    {"target_period_end": date(2025, 3, 29), "ocf_to_net_income": 2.17, "net_margin": None},
-    {"target_period_end": date(2025, 6, 28), "ocf_to_net_income": 3.49, "net_margin": 0.24},
-    {"target_period_end": date(2025, 12, 27), "ocf_to_net_income": 1.28, "net_margin": 0.25},
+    {"target_period_end": date(2025, 3, 29), "target_form": "10-Q", "ocf_to_net_income": 2.17, "net_margin": None},
+    {"target_period_end": date(2025, 6, 28), "target_form": "10-Q", "ocf_to_net_income": 3.49, "net_margin": 0.24},
+    {"target_period_end": date(2025, 9, 27), "target_form": "10-K", "ocf_to_net_income": 1.00, "net_margin": 0.30},
+    {"target_period_end": date(2025, 12, 27), "target_form": "10-Q", "ocf_to_net_income": 1.28, "net_margin": 0.25},
 ]
 
 
@@ -79,6 +81,24 @@ def test_illegal_feature_identifier_rejected():
     except ValueError:
         return
     raise AssertionError("illegal feature identifier should raise ValueError")
+
+
+def test_fiscal_year_end_skip_is_counted_and_surfaced():
+    """ADR-14: +1 from fiscal Q3 (Jun) to the next 10-Q (Dec) counts the 10-K annual
+    period (Sep) that sits between — the model is warned it crossed a year-end rather
+    than reading a ~6-month jump as two adjacent quarters."""
+    from qqq_scoring.investigator.tools.feature_history import to_model_content
+    r = _fh(date(2025, 6, 28), 1)[0]
+    assert r.status is FeatureStatus.FOUND
+    assert r.provenance.resolved_report_date == date(2025, 12, 27)   # next 10-Q, not the 10-K
+    assert r.value == 1.28                                           # quarterly value, NOT the annual 1.00
+    assert r.periods_skipped == 1
+    assert "fiscal_periods_skipped" in to_model_content([r])         # the model actually sees it
+
+
+def test_no_skip_within_the_same_fiscal_year():
+    r = _fh(date(2025, 6, 28), -1)[0]   # Jun -> prior Mar 10-Q, no year-end between
+    assert r.periods_skipped == 0
 
 
 def test_authentic_period_not_filed_re_grounds():

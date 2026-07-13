@@ -193,8 +193,28 @@
 >   `claude-fable-5`, decorrelated from the system's Opus/Sonnet — grades grounded +
 >   answers-key_question; PASS/FAIL/ABSTAIN per eval_schema). Running a 6-ticker
 >   sample (PANW/INSM/STX/VRSK/APP/FTNT) live; scores pending.
-> - **After Phase 6:** deploy 5b (user's Cloud Run step); interview deferred until
->   live in prod.
+> - **5b DEPLOYED TO CLOUD RUN & VERIFIED LIVE (2026-07-13).** `investigator-api` on
+>   signal-intel-prod, us-central1:
+>   `https://investigator-api-521865321554.us-central1.run.app`. Public + shared
+>   token (`X-Api-Token`); secrets `anthropic-api-key` + `investigator-api-token` in
+>   Secret Manager; runtime compute-SA granted secretAccessor + BQ dataViewer
+>   (qqq-anomaly-lab) + jobUser (signal-intel-prod). Root `Dockerfile` + `.gcloudignore`
+>   staged for `--source` builds. Verified: /health ok, /investigate WBD h1 ran a real
+>   prod deep-dive (grounded, 6 tools, 125s). **USER TODO in redink-ui env:**
+>   `INVESTIGATOR_SERVICE_URL=<url>`, `INVESTIGATOR_API_TOKEN=<token in scratchpad>`.
+> - **PHASE 6 EVAL RAN (6-ticker sample) — surfaced real issues (working as intended).**
+>   `scripts/eval_capture_investigations.py` + `qqq-eval-suite/evals/investigator_evals.py`.
+>   Findings: (1) **all 6 real flags CAP OUT** (don't converge at investigation_cap=5;
+>   fixtures resolved in 2-4 turns, real multi-driver flags need more) — top Improve
+>   item; (2) **latency high** (avg 551s, FTNT 2300s ≫ 180s budget) — 2 Layer-1 FAILs;
+>   (3) the **Fable independent judge caught a real hallucination** (STX: injected
+>   outside knowledge "Seagate carries negative book equity" contradicting the shown
+>   positive equity — the system's own capped judge missed it) → validates the
+>   decorrelated-judge design; (4) HARNESS BUG: Fable JSON parse brittle → 5 ABSTAINs
+>   (41.7%, false — needs a forced-tool verdict, not a real rubric issue).
+> - **Next Improve items:** raise/tune investigation_cap for real flags + latency;
+>   harden the eval's Fable-verdict parsing (forced tool). Interview deferred until
+>   the user is ready.
 
 ---
 

@@ -1,0 +1,8 @@
+# 5b live deep-dive service — deliberately a SUBSET of the repo's pyproject:
+# the service imports only the investigator package (loop/judge/graph/tools),
+# not the pandas/sklearn scoring stack, so its image stays small.
+fastapi>=0.115
+uvicorn>=0.30
+pydantic>=2.7
+anthropic>=0.40
+google-cloud-bigquery>=3.20

@@ -161,12 +161,23 @@
 >   mounted in `app/app/page.tsx` under the Investigation Brief (gated ALERT/FLAG).
 >   Typechecks 0 errors; query verified live (PANW 2023-Q2 → 4 branches). The
 >   "Investigate this branch" button is stubbed for 5b.
-> - **REDINK-UI 5b IN PROGRESS (Fable agent).** Approach A (Python service): a
->   FastAPI service in scoring-pipeline wrapping run_branch (real feature_history_bq
->   + fake narrative/balance_sheet + Judge w/ reverify map) → a Next proxy route →
->   the UI button runs a live deep-dive. Deploy-ready but Cloud Run deploy is the
->   user's step. Language boundary kept clean (Python = one source of truth, no TS
->   reimplement).
+> - **REDINK-UI 5b BUILT (2026-07-13, Fable agent; verified).** Approach A live end
+>   to end: `scoring-pipeline/service/investigator_api.py` (FastAPI: `/health`,
+>   `POST /investigate` → single `run_branch` on real feature_history_bq + fake
+>   narrative/balance_sheet + Judge reverify map; ADR-5 DTO, receipts not leaked;
+>   semaphore cost guard) + `service/{requirements.txt,Dockerfile,README.md}`;
+>   redink-ui `app/api/investigation/[ticker]/[quarter]/investigate/route.ts` proxy
+>   + `types/redink.ts` DTOs + `InvestigationGraph.tsx` button wired (loading,
+>   color-coded terminal states, verdict+evidence inline). VERIFIED by me: redink-ui
+>   `tsc` 0 errors, 76 investigator tests pass, live smoke (WBD h1 → RESOLVED/refuted/
+>   grounded, 118s, 6 tool calls). **NOT deployed — user's Cloud Run step** (sketch
+>   in service/README.md); env: `INVESTIGATOR_SERVICE_URL` (redink-ui),
+>   `ANTHROPIC_API_KEY` (service). Python kept as single source of truth (no TS reimpl).
+> - **DATA BUG surfaced + confirmed:** `output/feature_keys.json` lists
+>   `ocf_to_assets` + `equity_multiplier` which are NOT columns in prod
+>   `period_features` — the real-BQ deep-dive 400'd until Fable intersected the enum
+>   with the live schema. Fix upstream (regenerate feature_keys.json / add columns);
+>   anything trusting feature_keys.json vs real BQ is exposed. [[known_gaps]].
 > - **After 5b:** Phase 6 eval in qqq-eval-suite (independent grounding judge =
 >   Fable; ~12-investigation sample), then the last 3 hygiene items. Interview
 >   deferred until live in prod.

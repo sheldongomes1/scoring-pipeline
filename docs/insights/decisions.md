@@ -820,3 +820,81 @@ in Python; the value is read off the resolved row.
 - Real BQ body still lives beside the `NotImplementedError` stub in
   `feature_history.py` (the contract reference); the callable is injected, so both
   coexist — swap per environment.
+
+---
+
+## ADR-13: Grounding hardening — replay-the-request, always-on answer support, unrepairable integrity
+
+**Date:** 2026-07-12
+**Status:** Accepted (revises ADR-2, ADR-6)
+
+**Context:** An independent adversarial audit (a Fable-model reviewer, run before
+committing to a costly batch) found three real defects in the grounding gate — the
+mechanism the whole product's "won't hallucinate" promise rests on. Two were
+masked by the fakes and only appear against real data / numbers-only runs. This
+ADR fixes all three and honestly corrects an oversold claim in ADR-2/ADR-6.
+
+**The three defects:**
+1. **SEV-1 — `PERIOD_NOT_FILED` re-grounds as `FOUND` against real BigQuery.** For
+   an offset past a ticker's filed history (the canonical "did it recover next
+   quarter?" move), `feature_history_bq` set `resolved_report_date = report_date`
+   (the anchor). The judge re-verified at `(resolved_report_date, offset=0)` →
+   landed on the anchor row → `FOUND` ≠ `PERIOD_NOT_FILED` → grounding failed on
+   AUTHENTIC evidence → branch ABANDONED. The fake masked it (its calendar extends
+   past its filed window).
+2. **The gate checked evidence↔source, not answer↔numbers.** The deterministic head
+   re-fetched the evidence the loop recorded (authenticity) but never checked that
+   the figures the generator WROTE match the evidence. The answer↔evidence check
+   ran only when narrative evidence happened to exist, so numbers-only
+   investigations (the majority) had zero answer-level grounding — a generator that
+   fetched 0.95 and wrote "0.55" passed.
+3. **Repair could never fix a deterministic failure.** `evidence` is append-only, so
+   a failing item stays forever; every repair re-fails on it → guaranteed
+   `ABANDONED` after burning the whole `repair_cap`.
+
+**Decision — three fixes:**
+1. **Provenance carries the REQUEST; reverify replays it.** `Provenance` gains
+   `requested_report_date` + `requested_offset` (the anchor + signed offset the
+   agent asked for). The integrity head re-fetches `backend(ticker,
+   requested_report_date, requested_offset, [feature])` — reproducing the EXACT
+   original probe — so re-grounding is correct for FOUND, FEATURE_MISSING, AND
+   PERIOD_NOT_FILED alike. `resolved_report_date` remains a human/model-facing
+   output, NOT the reverify key.
+2. **Answer-support head, always on.** A model call (the generalized former
+   "semantic" head) now runs on EVERY evaluation with an answer + evidence, over
+   the full mixed evidence view: "does every factual claim in the answer — every
+   figure (allowing correct arithmetic) and every characterization — follow from
+   this evidence?" This is the real anti-hallucination gate; it catches a fabricated
+   number in a numbers-only answer. Skipped only when the integrity head already
+   failed (evidence untrustworthy; also preserves ADR-1's "no model call on
+   ungrounded output").
+3. **Split repairable vs unrepairable.** `_check_grounding` returns a
+   `deterministic_failure` flag; `JudgeVerdict` carries it. An INTEGRITY failure
+   (re-fetch mismatch / missing backend = source drift or config) is unrepairable →
+   the loop terminates ABANDONED immediately. An ANSWER-SUPPORT failure (the
+   generator mis-stated a figure/passage) is repairable → the repair loop, as before.
+
+**Honest correction to ADR-2/ADR-6:** their "deterministic re-fetch is un-gameable
+grounding" framing conflated evidence *authenticity* (which `==` does verify, and
+which in-process is nearly tautological) with answer *groundedness* (which needs a
+model and was not implemented for numbers). Grounding is now explicitly TWO things:
+authenticity (deterministic `==`) AND answer-support (model). The "un-gameable"
+claim applies only to the first.
+
+**Consequences:**
+- `contracts.py` `Provenance` +2 fields; all structured backends (fake, bq,
+  balance_sheet) set them. `judge.py`: `_check_grounding` → 3-tuple,
+  `_check_answer_support` always-on, `JudgeVerdict.deterministic_failure`.
+  `loop.py`: integrity failure → immediate ABANDONED.
+- 3 regression tests: authentic PERIOD_NOT_FILED re-grounds (bq), numeric
+  hallucination caught numbers-only, integrity failure abandons in 1 iteration. 70
+  tests total. Also fixed the stale pre-ADR-9 fixture source name (audit #13).
+- **Batch (Step 10) hardened** per audit #7–9: per-filing try/except + flush every
+  25 + incremental resume; `--ticker` idempotent (delete-then-append); a
+  `prompt_version` column; `--model` for tier A/B.
+- Cost of the always-on answer-support head: one extra Sonnet call per proposed
+  conclusion. Accepted — it IS the core guarantee.
+- **Deferred (tracked in `docs/insights/audit-2026-07-12-fable.md`):** #4 fiscal-Q4
+  10-K skip, #5 breadth-first expansion, #6 CAP_REACHED→INCONCLUSIVE laundering,
+  #10–12/#14–15 hygiene. None block the batch; #4–6 are quality items for the
+  interactive service.

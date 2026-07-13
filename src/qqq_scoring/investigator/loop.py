@@ -173,6 +173,16 @@ def run_investigation(
         verdict: JudgeVerdict = judge.evaluate(predicate or task, last_answer, evidence)
 
         if not verdict.grounded:
+            # ADR-13: an INTEGRITY failure (re-fetch mismatch / missing backend) is a
+            # source-drift or config event the generator cannot fix by re-answering.
+            # Terminating immediately avoids burning the whole repair_cap on a loop
+            # that is structurally guaranteed to keep failing on the same stale item.
+            if verdict.deterministic_failure:
+                return TerminalResult(
+                    TerminalReason.ABANDONED, turns, last_answer, tool_calls, messages, evidence, verdict
+                )
+            # Otherwise it's an answer-support failure (the generator mis-stated a
+            # figure or mischaracterized a passage) — that IS repairable.
             repairs += 1
             if repairs > repair_cap:
                 return TerminalResult(

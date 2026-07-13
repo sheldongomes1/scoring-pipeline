@@ -178,7 +178,7 @@ def test_to_model_content_shows_passage_hides_receipts():
 def test_semantic_grounding_passes_when_model_says_supported():
     narrative = narrative_sections_fake("AAPL", date(2025, 6, 30), "10-Q", ["mdna"])
     judge = Judge(client=ScriptedJudge(supported=True), reverify=feature_history_fake)
-    grounded, failed = judge._check_grounding(narrative, "AAPL called it a temporary timing effect.")
+    grounded, failed, _ = judge._check_grounding(narrative, "AAPL called it a temporary timing effect.")
     assert grounded is True
     assert failed == []
 
@@ -189,7 +189,7 @@ def test_semantic_grounding_fails_when_model_flags_a_claim():
         client=ScriptedJudge(supported=False, unsupported=["claims management admitted structural weakness"]),
         reverify=feature_history_fake,
     )
-    grounded, failed = judge._check_grounding(narrative, "AAPL management admitted structural weakness.")
+    grounded, failed, _ = judge._check_grounding(narrative, "AAPL management admitted structural weakness.")
     assert grounded is False
     assert failed == ["claims management admitted structural weakness"]
 
@@ -200,7 +200,7 @@ def test_mixed_evidence_uses_both_grounding_heads():
     structured = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
     narrative = narrative_sections_fake("AAPL", date(2025, 6, 30), "10-Q", ["mdna"])
     judge = Judge(client=ScriptedJudge(supported=True), reverify=feature_history_fake)
-    grounded, failed = judge._check_grounding(structured + narrative, "recovered; timing was temporary")
+    grounded, failed, _ = judge._check_grounding(structured + narrative, "recovered; timing was temporary")
     assert grounded is True
     assert failed == []
 

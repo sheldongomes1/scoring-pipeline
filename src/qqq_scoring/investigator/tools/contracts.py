@@ -50,12 +50,20 @@ class Provenance:
     """
 
     source: str                 # golden table, e.g. "qqq_finance.period_features"
-    ticker: str                 # source identity — with resolved_report_date + feature,
-    #                             the backend-agnostic re-dispatch handle the JUDGE uses
-    #                             to independently re-fetch and verify (ADR-6 grounding).
+    ticker: str                 # source identity (with the request fields below, the
+    #                             backend-agnostic re-dispatch handle the JUDGE uses).
     resolved_report_date: date  # the quarter the tool ACTUALLY landed on after
-    #                             applying period_offset — guards the calendar-math
-    #                             trap: catches a claim citing the wrong period.
+    #                             applying the offset — for the model/human to read.
+    #                             NOT the reverify key (ADR-13): for a not-filed
+    #                             period this is a fallback, so replaying it lands on
+    #                             the wrong row. Reverify replays the REQUEST, below.
+    requested_report_date: date  # the ANCHOR the agent asked from — the reverify key
+    requested_offset: int        # the signed offset the agent asked for — the reverify key.
+    #                             Replaying (requested_report_date, requested_offset)
+    #                             reproduces the EXACT original probe, so re-grounding
+    #                             is correct for FOUND, FEATURE_MISSING, AND
+    #                             PERIOD_NOT_FILED alike (ADR-13 fixes the SEV-1 bug
+    #                             where a not-filed probe re-grounded as FOUND).
     query: str                  # the exact, re-runnable lookup (the human/BQ-facing handle)
     retrieved_at: datetime      # restatements change values, so the read is timestamped
     accession_number: str | None = None  # exact source row/filing; None when the

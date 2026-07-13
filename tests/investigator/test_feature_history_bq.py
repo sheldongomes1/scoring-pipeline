@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
+from qqq_scoring.investigator.judge import Judge  # noqa: E402
 from qqq_scoring.investigator.tools.contracts import FeatureStatus  # noqa: E402
 from qqq_scoring.investigator.tools.feature_history_bq import feature_history_bq  # noqa: E402
 
@@ -78,6 +79,22 @@ def test_illegal_feature_identifier_rejected():
     except ValueError:
         return
     raise AssertionError("illegal feature identifier should raise ValueError")
+
+
+def test_authentic_period_not_filed_re_grounds():
+    """ADR-13 (SEV-1 fix): a PERIOD_NOT_FILED probe (offset past the ticker's filed
+    history — the canonical 'did it recover next quarter?' move) must re-ground as
+    AUTHENTIC. The judge replays the REQUEST (anchor + offset), not resolved+0 —
+    which previously landed on the anchor row, returned FOUND, and falsely failed
+    grounding on real data, dooming the branch to ABANDONED."""
+    client = _FakeBQ(_ROWS)
+    reverify = lambda tk, rd, off, fs: feature_history_bq(tk, rd, off, fs, client=client)
+    evidence = feature_history_bq("AAPL", date(2025, 12, 27), 3, ["ocf_to_net_income"], client=client)
+    assert evidence[0].status is FeatureStatus.PERIOD_NOT_FILED     # offset past the latest filing
+    grounded, failed, det = Judge(client=None, reverify=reverify)._check_grounding(evidence)
+    assert grounded is True     # authentic not-filed re-grounds cleanly (was False before the fix)
+    assert det is False
+    assert failed == []
 
 
 def _run():

@@ -116,14 +116,30 @@
 >   against `qqq_finance.period_features` (AAPL) + 6 unit tests. 62 tests total.
 >   Fake→real swap = one-line binding change; SOURCE key unchanged so grounding
 >   re-queries real BQ.
-> - **(c) IN PROGRESS — Phase 5 prod surface.** Open checkpoint: the investigator is
->   INTERACTIVE (human steers a branch at request time), which collides with
->   CLAUDE.md's "every pipeline element is an orchestrate.py step" mandate. Likely
->   resolution: SPLIT — batch pre-compute of level-1 branch PROPOSALS per flagged
->   filing = an orchestrate.py step writing a BQ table; interactive steer + deep-dive
->   = a request-time redink-ui service (the UI half is a separate, larger effort).
-> - **After (c):** Phase 6 eval in qqq-eval-suite (grounded? answers key_question?
->   cost/latency per tree). Interview deferred by Sheldon until live in prod.
+> - **(c) IN PROGRESS — Phase 5 prod surface.** Cut resolved (batch/interactive split):
+>   BATCH `propose_branches` per flagged filing = new **Step 10**
+>   (`explanations/propose_investigation_branches.py`) → BQ `investigation_branches`;
+>   interactive steer + deep-dive = a request-time redink-ui service (UI half = a
+>   separate, larger effort, not built). Step 10 registered in orchestrate.py; dry-run
+>   shows 520 flagged filings.
+> - **FABLE AUDIT (2026-07-12) — ran before the 520-call batch; found real bugs.**
+>   Full tracker: `docs/insights/audit-2026-07-12-fable.md`.
+>   - **FIXED (ADR-13):** SEV-1 PERIOD_NOT_FILED re-grounds as FOUND vs real BQ (fakes
+>     masked it); grounding checked evidence↔source not answer↔numbers (answer-support
+>     head now always-on); repair couldn't fix deterministic failures (now unrepairable
+>     → immediate ABANDONED). Provenance gained `requested_report_date`+`requested_offset`
+>     (reverify replays the request). 70 tests (3 new regressions).
+>   - **FIXED (batch hardening):** per-filing try/except + flush-every-25 + resume;
+>     `--ticker` idempotent; `prompt_version` col; `--model` A/B flag.
+>   - **DEFERRED (tracked):** #4 fiscal-Q4/10-K skip, #5 breadth-first expand, #6
+>     CAP→INCONCLUSIVE, #10–12/#14–15 hygiene — none block the batch; #4–6 are
+>     interactive-service quality.
+> - **GATE before the 520-call batch (audit #9):** run
+>   `propose_investigation_branches.py --limit 15` with Sonnet AND Opus, hand-review
+>   hypothesis distinctness / predicate-not-method / plausibility, freeze the prompt,
+>   THEN run the full 520 (`--full-refresh` after any prompt change). Cost ~$3–8; the
+>   issue is proposal quality on the thin batch context, not cost.
+> - **After (c):** Phase 6 eval in qqq-eval-suite. Interview deferred until live in prod.
 
 ---
 

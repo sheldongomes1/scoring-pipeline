@@ -293,3 +293,34 @@ the lesson body. Chronological order.
   stop plus a hard budget cap. Then I added recursion on top and almost forgot: the
   recursion needs its OWN brake. Termination doesn't inherit when you add a level.
   And a tree explodes exponentially, so the hard cap matters more, not less."
+
+## 2026-07-12 — My fakes hid a SEV-1, and a different model found it
+
+- Situation: Before running a 520-call batch, I had a second model (a different
+  family) do an adversarial audit of the whole system — the same "a separate judge
+  decorrelates blind spots" principle the product is built on, turned on my own work.
+- What it found: three real defects in the grounding gate — the exact mechanism the
+  product's "won't hallucinate" promise rests on. The worst: against REAL BigQuery,
+  the most common analyst query ("+1 quarter — did it recover?") re-grounded
+  authentic "not-filed" evidence as a wrong value and abandoned the investigation.
+  My in-memory FAKE masked it, because the fake's calendar was tidy where real
+  filings are not. A second: I'd been claiming "deterministic, un-gameable grounding"
+  — but the code only checked the evidence was authentic, never that the numbers the
+  model WROTE matched the evidence. For numbers-only investigations the
+  anti-hallucination guarantee wasn't implemented; a demo happened to catch a
+  narrative overreach and I generalized from luck.
+- Lesson: (1) fakes prove a mechanism CLOSES; they do not prove it's CORRECT against
+  real data — the fake's convenient regularities are exactly where the integration
+  bug hides. Budget a real-data pass before trusting a faked mechanism. (2) Beware
+  your own confident ADR prose: "un-gameable" was rhetoric that outran the code, and
+  it took an outside model to separate the claim from the implementation. (3) An
+  adversarial review by a different model family, run BEFORE the expensive operation,
+  is cheap insurance that pays for itself — it is literally the design principle of
+  the thing I was building, applied to the building of it.
+- Fix / rework: ADR-13 — provenance replays the request; an always-on answer↔evidence
+  head; integrity failures made unrepairable. Full findings + status:
+  docs/insights/audit-2026-07-12-fable.md.
+- Post angle: "I asked a different AI model to audit my AI system before a costly
+  run. It found a critical bug my own test fakes had hidden — and caught me claiming
+  'un-gameable grounding' the code didn't implement. Fakes prove your thing runs, not
+  that it's right. Have a different mind check before you spend."

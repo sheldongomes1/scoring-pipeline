@@ -50,6 +50,12 @@ OUTPUT_TABLE = f"{BQ_PROJECT}.{BQ_DATASET}.investigation_branches"
 # interactive deep-dive (per steered branch, far rarer) can afford Opus.
 MODEL        = "claude-sonnet-5"
 N_BRANCHES   = 4
+# Bump when the proposer prompt/schema changes so stale hypotheses can be invalidated
+# (findings #8). Stamped on every row.
+PROMPT_VERSION = "v1"
+# Flush to BQ every N filings so a crash mid-run doesn't lose everything and a rerun
+# resumes via the incremental skip (findings #7).
+FLUSH_EVERY  = 25
 # Only the filings actually worth investigating — the ambiguous, high-signal flags.
 TARGET_TIERS = ("ALERT", "FLAG")
 
@@ -75,7 +81,7 @@ def flag_from_row(row) -> Flag:
     return Flag(ticker=row["ticker"], report_date=row["report_date"], form=row.get("form_type", "10-Q"), summary=summary)
 
 
-def branch_rows(flag: Flag, branches, row, generated_at: datetime) -> list[dict]:
+def branch_rows(flag: Flag, branches, row, generated_at: datetime, model: str = MODEL) -> list[dict]:
     """Flatten proposed branches into output rows for the branches table."""
     return [
         {
@@ -89,7 +95,8 @@ def branch_rows(flag: Flag, branches, row, generated_at: datetime) -> list[dict]
             "rationale": b.rationale,
             "predicate": b.predicate,          # the steering wire the UI hands to the realtime service
             "status": b.status.value,          # 'proposed' — never investigated in batch
-            "model": MODEL,
+            "model": model,
+            "prompt_version": PROMPT_VERSION,  # invalidation handle (findings #8)
             "generated_at": generated_at,
         }
         for b in branches
@@ -162,17 +169,30 @@ def _upload(client: bigquery.Client, rows: list[dict], truncate: bool) -> None:
     print(f"  Uploaded {len(df)} branch rows → {OUTPUT_TABLE}  [{'TRUNCATE' if truncate else 'APPEND'}]")
 
 
+def _delete_ticker(client: bigquery.Client, ticker: str) -> None:
+    """Make a targeted --ticker rerun idempotent: drop that ticker's existing branch
+    rows before re-appending (findings #8 — otherwise WRITE_APPEND duplicates them)."""
+    if not _table_exists(client, OUTPUT_TABLE):
+        return
+    client.query(
+        f"DELETE FROM `{OUTPUT_TABLE}` WHERE ticker=@t",
+        job_config=bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("t", "STRING", ticker)]),
+    ).result()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Pre-compute investigation-graph roots for flagged filings")
-    ap.add_argument("--ticker", help="Only this ticker")
+    ap.add_argument("--ticker", help="Only this ticker (idempotent: replaces its rows)")
     ap.add_argument("--limit", type=int, help="Cap filings processed (cheap live test)")
+    ap.add_argument("--model", default=MODEL, help=f"Proposer model (default {MODEL}); use to A/B tiers")
     ap.add_argument("--full-refresh", action="store_true", help="Rebuild the whole table")
     ap.add_argument("--dry-run", action="store_true", help="Count filings, no LLM/write")
     args = ap.parse_args()
 
     bq = bigquery.Client(project=BQ_PROJECT)
     flags = load_flags(bq, args.ticker, args.limit, args.full_refresh)
-    print(f"Flagged filings to propose branches for: {len(flags)}")
+    print(f"Flagged filings to propose branches for: {len(flags)}  (model={args.model})")
     if args.dry_run:
         for _, r in flags.head(5).iterrows():
             print(f"  {r['ticker']} {r.get('form_type')} @ {r['report_date']}  [{r['conviction_tier']}]")
@@ -181,17 +201,44 @@ def main() -> None:
         print("Nothing to do (all flagged filings already have branches).")
         return
 
+    if args.ticker and not args.full_refresh:
+        _delete_ticker(bq, args.ticker)   # idempotent targeted rerun
+
     import anthropic
     llm = anthropic.Anthropic()
     generated_at = datetime.now(timezone.utc)
     out: list[dict] = []
-    for _, row in flags.iterrows():
-        flag = flag_from_row(row)
-        graph = propose_branches(llm, flag, n=N_BRANCHES, model=MODEL)
-        out.extend(branch_rows(flag, graph.branches, row, generated_at))
-        print(f"  {flag.ticker} @ {flag.report_date}: {len(graph.branches)} branches")
+    ok = fail = 0
+    uploaded_any = False
 
-    _upload(bq, out, truncate=args.full_refresh)
+    def flush() -> None:
+        # First flush honours --full-refresh (TRUNCATE); later flushes must APPEND,
+        # or they would wipe earlier flushes. Incremental skip lets a rerun resume.
+        nonlocal uploaded_any
+        if not out:
+            return
+        _upload(bq, out, truncate=(args.full_refresh and not uploaded_any))
+        uploaded_any = True
+        out.clear()
+
+    for i, (_, row) in enumerate(flags.iterrows(), 1):
+        flag = flag_from_row(row)
+        try:
+            graph = propose_branches(llm, flag, n=N_BRANCHES, model=args.model)
+            if not graph.branches:
+                print(f"  WARN {flag.ticker} @ {flag.report_date}: 0 branches (will retry next run)")
+                continue
+            out.extend(branch_rows(flag, graph.branches, row, generated_at, model=args.model))
+            ok += 1
+        except Exception as e:  # one bad filing must not lose the batch (findings #7)
+            fail += 1
+            print(f"  ERROR {flag.ticker} @ {flag.report_date}: {type(e).__name__}: {e}")
+        if i % FLUSH_EVERY == 0:
+            flush()
+            print(f"  … checkpoint at {i}/{len(flags)}  (ok={ok} fail={fail})")
+
+    flush()
+    print(f"Done. filings ok={ok} fail={fail}. Rerun resumes any failures via incremental skip.")
 
 
 if __name__ == "__main__":

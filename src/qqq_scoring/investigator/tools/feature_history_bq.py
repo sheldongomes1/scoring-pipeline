@@ -77,6 +77,8 @@ def feature_history_bq(
             source=SOURCE,
             ticker=ticker,
             resolved_report_date=resolved or report_date,
+            requested_report_date=report_date,   # ADR-13: reverify replays the REQUEST,
+            requested_offset=period_offset,       # not resolved+0 (which mis-grounds not-filed)
             query=(
                 f"SELECT {feature} FROM {SOURCE} WHERE ticker='{ticker}' "
                 f"AND target_form='{form}' AND target_period_end='{resolved}'"

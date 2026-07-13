@@ -126,11 +126,16 @@ def _end_turn(text="done"):
 
 
 def _tampered_result(value):
-    """A FOUND result whose value does NOT match what the source will re-fetch."""
+    """A FOUND result whose value does NOT match what the source will re-fetch.
+
+    The request (anchor 2025-06-30, offset +1) replays to the real fixture value
+    0.95 @ 2025-09-30; a tampered `value` (0.60) mismatches → grounding fails."""
     prov = Provenance(
-        source="qqq_finance.period_features (in-memory fixture)",
+        source="qqq_finance.period_features",   # ADR-9 logical source (was the stale fixture name)
         ticker="AAPL",
         resolved_report_date=date(2025, 9, 30),
+        requested_report_date=date(2025, 6, 30),
+        requested_offset=1,
         query="SELECT ocf_to_net_income FROM period_features WHERE ...",
         retrieved_at=datetime(2026, 7, 5, tzinfo=timezone.utc),
         accession_number="0000320193-25-000073",
@@ -145,7 +150,7 @@ def test_grounding_passes_for_authentic_evidence():
     """Evidence produced by the backend re-verifies against that same source."""
     evidence = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
     judge = Judge(client=None, reverify=feature_history_fake)
-    grounded, failed = judge._check_grounding(evidence)
+    grounded, failed, _ = judge._check_grounding(evidence)
     assert grounded is True
     assert failed == []
 
@@ -154,7 +159,7 @@ def test_grounding_fails_for_tampered_value():
     """A cited figure the source does not confirm (0.60 vs real 0.95) is caught —
     deterministically, by re-fetch + ==, with no model in the loop."""
     judge = Judge(client=None, reverify=feature_history_fake)
-    grounded, failed = judge._check_grounding([_tampered_result(0.60)])
+    grounded, failed, _ = judge._check_grounding([_tampered_result(0.60)])
     assert grounded is False
     assert failed == ["ocf_to_net_income@2025-09-30"]
 
@@ -170,12 +175,15 @@ def test_ungrounded_evidence_short_circuits_the_model():
 
 
 def test_grounded_evidence_gets_a_model_grade():
-    """When G passes, the judge model is called and its submit_judgment drives C/O."""
+    """When integrity passes, the judge model runs TWICE: answer-support (ADR-13),
+    then submit_judgment for C/O. Both turns scripted."""
     evidence = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
-    judge_client = ScriptedClient(
-        [_Response("tool_use", [_ToolUseBlock("j1", "submit_judgment",
-            {"confirm": "confirmed", "open_questions": False, "reasoning": "recovered to 0.95"})])]
-    )
+    judge_client = ScriptedClient([
+        _Response("tool_use", [_ToolUseBlock("g1", "submit_grounding",
+            {"supported": True, "unsupported_claims": [], "reasoning": "0.95 is in the evidence"})]),
+        _Response("tool_use", [_ToolUseBlock("j1", "submit_judgment",
+            {"confirm": "confirmed", "open_questions": False, "reasoning": "recovered to 0.95"})]),
+    ])
     judge = Judge(client=judge_client, reverify=feature_history_fake)
     verdict = judge.evaluate("did ocf_to_net_income recover?", "yes, to 0.95", evidence)
     assert verdict.grounded is True
@@ -243,13 +251,44 @@ def test_loop_continues_on_open_questions_then_resolves():
 
 
 def test_loop_abandons_after_repair_cap():
-    """Persistent grounding failure exhausts repair_cap and abandons (ADR-1)."""
+    """Persistent (repairable) grounding failure exhausts repair_cap and abandons (ADR-1)."""
     client = ScriptedClient([_end_turn("ungrounded")], repeat_last=True)
     res = run_investigation(
         client, _registry(), "task", judge=FakeJudge([_ungrounded_v()]), repair_cap=1
     )
     assert res.reason is TerminalReason.ABANDONED
     assert res.iterations == 2   # 1st proposal repairs, 2nd exceeds repair_cap
+
+
+def _det_ungrounded_v():
+    return JudgeVerdict(False, None, None, "integrity re-check failed",
+                        ("ocf@2025-09-30",), deterministic_failure=True)
+
+
+def test_deterministic_failure_abandons_immediately(_cap=3):
+    """ADR-13 (#3): an INTEGRITY failure is unrepairable, so the loop terminates at
+    once — it does NOT burn repair_cap on a retry that is guaranteed to re-fail."""
+    client = ScriptedClient([_end_turn("ungrounded")], repeat_last=True)
+    res = run_investigation(
+        client, _registry(), "task", judge=FakeJudge([_det_ungrounded_v()]), repair_cap=_cap
+    )
+    assert res.reason is TerminalReason.ABANDONED
+    assert res.iterations == 1   # immediate — no repair loop despite repair_cap=3
+
+
+def test_answer_support_catches_numeric_hallucination_numbers_only():
+    """ADR-13 (#2): the answer-support head runs for NUMBERS-ONLY investigations —
+    a figure the generator never fetched is caught, not just narrative overreach."""
+    evidence = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])  # FOUND 0.95
+    client = ScriptedClient([_Response("tool_use", [_ToolUseBlock("g1", "submit_grounding",
+        {"supported": False, "unsupported_claims": ["answer says 0.55 but evidence shows 0.95"],
+         "reasoning": "fabricated figure"})])])
+    judge = Judge(client=client, reverify=feature_history_fake)
+    grounded, failed, det = judge._check_grounding(evidence, "OCF/NI was 0.55 — collapse confirmed.")
+    assert grounded is False
+    assert det is False               # a mis-statement, not an integrity failure → repairable
+    assert client.calls               # the model WAS consulted even for a numbers-only answer
+    assert "0.55" in failed[0]
 
 
 def test_no_judge_preserves_model_stopped():

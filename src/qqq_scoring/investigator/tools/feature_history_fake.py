@@ -98,6 +98,8 @@ def feature_history_fake(
                 source=SOURCE,
                 ticker=ticker,
                 resolved_report_date=resolved or report_date,
+                requested_report_date=report_date,
+                requested_offset=period_offset,
                 query=f"SELECT {feature} FROM period_features WHERE ticker='{ticker}' AND report_date='{resolved}'",
                 retrieved_at=retrieved_at,
                 accession_number=None,  # no row exists to cite
@@ -110,6 +112,8 @@ def feature_history_fake(
             source=SOURCE,
             ticker=ticker,
             resolved_report_date=resolved,
+            requested_report_date=report_date,
+            requested_offset=period_offset,
             query=f"SELECT {feature} FROM period_features WHERE ticker='{ticker}' AND report_date='{resolved}'",
             retrieved_at=retrieved_at,
             accession_number=_ACCESSION.get((ticker, resolved)),

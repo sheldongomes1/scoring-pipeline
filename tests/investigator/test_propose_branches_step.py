@@ -72,6 +72,14 @@ def test_branch_rows_shape_and_status():
     assert r["status"] == BranchStatus.PROPOSED.value          # never investigated in batch
     assert r["conviction_tier"] == "ALERT"
     assert r["generated_at"] == ts
+    assert r["prompt_version"]                                  # invalidation handle stamped (#8)
+
+
+def test_branch_rows_records_model_used():
+    flag = flag_from_row(_row())
+    branches = [Branch("h1", "x", "y", "z?")]
+    rows = branch_rows(flag, branches, _row(), datetime.now(timezone.utc), model="claude-opus-4-8")
+    assert rows[0]["model"] == "claude-opus-4-8"
 
 
 def _run():

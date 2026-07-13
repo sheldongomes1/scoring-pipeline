@@ -56,7 +56,11 @@ class JudgeVerdict:
     confirm: Confirm | None
     open_questions: bool | None
     reasoning: str
-    ungrounded_items: tuple[str, ...] = ()  # which evidence failed re-verification
+    ungrounded_items: tuple[str, ...] = ()  # which evidence/claims failed grounding
+    deterministic_failure: bool = False     # a re-fetch integrity failure (ADR-13): the
+    #                                         generator CANNOT fix this (source drift /
+    #                                         config), so the loop must not waste repair
+    #                                         cycles on it — route straight to ABANDONED.
 
 
 def _judgment_tool() -> dict:
@@ -151,53 +155,68 @@ class Judge:
 
     # --- G: two-headed, dispatched by the evidence's declared mode (ADR-7) ----
 
-    def _check_grounding(self, evidence: list, answer: str = "") -> tuple[bool, list[str]]:
-        """Grounding gate over MIXED evidence. Each item declares how to verify it
-        (`grounding_mode`), so the judge dispatches instead of `isinstance`-branching.
-        Overall grounded = deterministic items re-verify AND narrative items
-        semantically support the answer. Either head failing → not grounded."""
-        deterministic = [e for e in evidence if e.grounding_mode is GroundingMode.DETERMINISTIC]
-        semantic = [e for e in evidence if e.grounding_mode is GroundingMode.SEMANTIC]
-        failed: list[str] = []
+    def _check_grounding(self, evidence: list, answer: str = "") -> tuple[bool, list[str], bool]:
+        """Grounding gate. Returns (grounded, failed_items, deterministic_failure).
 
-        # Head 1 — structured: re-fetch by identity, compare ==. No model call.
-        # Route to the backend that produced the item, by provenance.source (ADR-9).
+        Two heads (ADR-13 hardened):
+          1. INTEGRITY (deterministic, per structured item): re-fetch by REPLAYING
+             the original request (requested_report_date + requested_offset), route
+             by provenance.source, compare (status, value). Confirms the evidence is
+             authentic. A failure here is a source-drift/config event the generator
+             CANNOT fix → `deterministic_failure=True` (unrepairable).
+          2. ANSWER-SUPPORT (model, ALWAYS runs when there's an answer + evidence):
+             does every factual claim in the ANSWER — every figure and every
+             characterization — follow from the (now-authentic) evidence? This is
+             the guard against the generator writing a number it never fetched, and
+             it runs for numbers-only investigations too (ADR-13 fix: previously it
+             only ran when narrative evidence happened to exist). A failure here is
+             the generator's mis-statement → repairable."""
+        deterministic = [e for e in evidence if e.grounding_mode is GroundingMode.DETERMINISTIC]
+        failed: list[str] = []
+        deterministic_failure = False
+
+        # Head 1 — INTEGRITY: replay the exact request and compare. No model call.
         for item in deterministic:
             prov = item.provenance
             backend = self._backend_for(item)
             if backend is None:
-                failed.append(f"{item.feature}@{prov.resolved_report_date} (no reverify backend for source {prov.source!r})")
+                failed.append(f"{item.feature}@{prov.resolved_report_date} (no reverify backend for {prov.source!r})")
+                deterministic_failure = True
                 continue
-            fresh = backend(prov.ticker, prov.resolved_report_date, 0, [item.feature])
+            fresh = backend(prov.ticker, prov.requested_report_date, prov.requested_offset, [item.feature])
             match = next((r for r in fresh if r.feature == item.feature), None)
             if match is None or match.status != item.status or match.value != item.value:
                 failed.append(f"{item.feature}@{prov.resolved_report_date}")
+                deterministic_failure = True
 
-        # Head 2 — narrative: a model checks the passages support the answer's
-        # claims. You cannot == a paragraph; this catches the answer twisting the
-        # prose ("management admitted weakness" when it said "we remain confident").
-        if semantic:
-            supported, unsupported = self._check_semantic_grounding(answer, semantic)
+        # Head 2 — ANSWER-SUPPORT: does the answer's every claim follow from the
+        # evidence? Always runs (numbers AND prose) — the real anti-hallucination
+        # gate. Skipped when integrity already failed: the evidence is untrustworthy,
+        # so checking the answer against it is pointless, and this preserves ADR-1's
+        # "don't consult the model on ungrounded output" (no wasted model call).
+        if not deterministic_failure and answer.strip() and evidence:
+            supported, unsupported = self._check_answer_support(answer, evidence)
             if not supported:
-                failed.extend(unsupported or ["narrative claims not supported by passages"])
+                failed.extend(unsupported or ["answer claims not supported by evidence"])
 
-        return (len(failed) == 0, failed)
+        return (len(failed) == 0, failed, deterministic_failure)
 
-    def _check_semantic_grounding(self, answer: str, narrative: list) -> tuple[bool, list[str]]:
-        """The SEMANTIC head of G: does every characterization of the narrative in
-        the answer follow from the retrieved passages? A model call — grounding is
-        deterministic only for structured data (ADR-2/ADR-7)."""
-        passages = json.dumps(
-            [{"section": r.section, "status": r.status.value, "passage": r.passage} for r in narrative]
-        )
+    def _check_answer_support(self, answer: str, evidence: list) -> tuple[bool, list[str]]:
+        """The ANSWER-SUPPORT head of G (ADR-13): does every factual claim in the
+        answer — numeric or narrative — follow from the verified evidence? A model
+        call, because it must understand derived figures (0.55→0.95 is +0.40) and
+        prose paraphrase, neither of which survives an `==`. Catches the generator
+        citing a number it never fetched or mischaracterizing a passage."""
+        view = json.dumps([self._view(e) for e in evidence])
         prompt = (
-            "An investigator retrieved these EXACT filing passages (verbatim from "
-            f"source):\n{passages}\n\n"
+            "An investigator was given ONLY this verified evidence (numbers re-fetched "
+            f"from source, passages verbatim):\n{view}\n\n"
             f"It then wrote this answer:\n{answer}\n\n"
-            "Does every claim the answer makes ABOUT THE NARRATIVE follow from those "
-            "passages? Flag any characterization the passages do not support (e.g. "
-            "claiming management conceded a problem when the passage frames it as "
-            "temporary). Call submit_grounding."
+            "Does EVERY factual claim in the answer follow from this evidence — every "
+            "figure (allowing correct arithmetic on the given numbers) and every "
+            "characterization of the narrative? Flag any claim not supported: a number "
+            "that is not in the evidence and is not derivable from it, or a "
+            "characterization the passages do not support. Call submit_grounding."
         )
         resp = self._client.messages.create(
             model=self._model,
@@ -265,15 +284,18 @@ class Judge:
 
     def evaluate(self, predicate: str, answer: str, evidence: list[FeatureResult]) -> JudgeVerdict:
         """Grade a proposed conclusion. Grounding gates everything (ADR-1)."""
-        grounded, failed = self._check_grounding(evidence, answer)
+        grounded, failed, deterministic_failure = self._check_grounding(evidence, answer)
         if not grounded:
             # Short-circuit: C and O would be produced by the same untrustworthy
-            # reasoning, so they are not consulted. Route to repair.
+            # reasoning, so they are not consulted. `deterministic_failure` tells the
+            # loop whether this is repairable (answer mis-statement) or not (integrity).
+            kind = "integrity re-check failed" if deterministic_failure else "answer not supported by evidence"
             return JudgeVerdict(
                 grounded=False,
                 confirm=None,
                 open_questions=None,
-                reasoning=f"grounding failed: {failed} did not re-verify against source",
+                reasoning=f"grounding failed ({kind}): {failed}",
                 ungrounded_items=tuple(failed),
+                deterministic_failure=deterministic_failure,
             )
         return self._grade_semantics(predicate, answer, evidence)

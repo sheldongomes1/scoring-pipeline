@@ -154,8 +154,22 @@
 >   `expand` (no sibling starvation; budget-capped children kept as PROPOSED). 76
 >   tests. Only low-risk hygiene remains deferred: #10 judge no-payload fail-closed,
 >   #12 evidence-dedupe, #14 parameterize `--ticker` SQL, #15 usage logging.
-> - **After the batch:** redink-ui interactive service (steer + deep-dive); Phase 6
->   eval in qqq-eval-suite. Interview deferred until live in prod.
+> - **REDINK-UI 5a DONE (2026-07-13).** Disambiguation graph rendered in the UI:
+>   `redink-ui` `types/redink.ts` (`InvestigationBranchRow`),
+>   `app/api/investigation/[ticker]/[quarter]/route.ts` (BQ read of
+>   investigation_branches), `app/InvestigationGraph.tsx` (client component),
+>   mounted in `app/app/page.tsx` under the Investigation Brief (gated ALERT/FLAG).
+>   Typechecks 0 errors; query verified live (PANW 2023-Q2 → 4 branches). The
+>   "Investigate this branch" button is stubbed for 5b.
+> - **REDINK-UI 5b IN PROGRESS (Fable agent).** Approach A (Python service): a
+>   FastAPI service in scoring-pipeline wrapping run_branch (real feature_history_bq
+>   + fake narrative/balance_sheet + Judge w/ reverify map) → a Next proxy route →
+>   the UI button runs a live deep-dive. Deploy-ready but Cloud Run deploy is the
+>   user's step. Language boundary kept clean (Python = one source of truth, no TS
+>   reimplement).
+> - **After 5b:** Phase 6 eval in qqq-eval-suite (independent grounding judge =
+>   Fable; ~12-investigation sample), then the last 3 hygiene items. Interview
+>   deferred until live in prod.
 
 ---
 

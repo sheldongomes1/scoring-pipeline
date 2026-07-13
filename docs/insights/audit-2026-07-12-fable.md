@@ -36,7 +36,7 @@ Status legend: **FIXED** (ADR-13 / same-day) · **DEFERRED** (tracked, with rati
 | 12 | Reverify cost O(evidence × evaluations); each bq call pulls full history; duplicate evidence re-verified. | **DEFERRED** — dedupe evidence by `(source, ticker, date, feature)`. |
 | 13 | Stale pre-ADR-9 fixture source name in `test_judge.py`. | **FIXED** — updated to the logical source. |
 | 14 | `load_flags` interpolates `--ticker` into SQL (inconsistent with parameterized queries). | **DEFERRED** — parameterize (low risk: not user-facing input). |
-| 15 | No observability: no token/usage logging; batch transcripts not persisted. | **DEFERRED** — log per-call usage in Step 10 before the at-scale run for calibration. |
+| 15 | No observability: no token/usage logging; batch transcripts not persisted. | **FIXED** — `propose_branches(return_usage=True)`; Step 10 logs running token in/out + est. $ per checkpoint and at end. (Batch also gained `--concurrency` thread-pool + `_cost` estimate.) |
 
 ## What the audit affirmed as sound
 Generator/judge receipt-withholding (ADR-5, test-enforced); status enums paying off

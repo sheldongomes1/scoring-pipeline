@@ -134,8 +134,13 @@ def _proposer_tool(n: int) -> dict:
     }
 
 
-def propose_branches(client: Any, flag: Flag, n: int = 4, model: str = PROPOSER_MODEL) -> InvestigationGraph:
-    """The fan-out: one cheap call naming N hypotheses. No tools, no investigation."""
+def propose_branches(client: Any, flag: Flag, n: int = 4, model: str = PROPOSER_MODEL,
+                     return_usage: bool = False):
+    """The fan-out: one cheap call naming N hypotheses. No tools, no investigation.
+
+    `return_usage=True` also returns a `{input_tokens, output_tokens}` dict (audit
+    #15 — lets the batch log per-call token usage for cost calibration). Default
+    False keeps the interactive callers' return type unchanged."""
     prompt = (
         f"A screening model flagged this filing:\n"
         f"  Company: {flag.ticker}   Filing: {flag.form} @ {flag.report_date}\n"
@@ -161,7 +166,13 @@ def propose_branches(client: Any, flag: Flag, n: int = 4, model: str = PROPOSER_
         )
         for i, h in enumerate(hypotheses)
     ]
-    return InvestigationGraph(flag=flag, branches=branches)
+    graph = InvestigationGraph(flag=flag, branches=branches)
+    if return_usage:
+        u = getattr(resp, "usage", None)
+        usage = {"input_tokens": getattr(u, "input_tokens", 0) or 0,
+                 "output_tokens": getattr(u, "output_tokens", 0) or 0}
+        return graph, usage
+    return graph
 
 
 _STATUS_FROM_REASON = {

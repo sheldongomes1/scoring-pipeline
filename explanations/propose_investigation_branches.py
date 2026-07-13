@@ -56,8 +56,19 @@ PROMPT_VERSION = "v1"
 # Flush to BQ every N filings so a crash mid-run doesn't lose everything and a rerun
 # resumes via the incremental skip (findings #7).
 FLUSH_EVERY  = 25
+# Concurrent proposer calls (in-process thread pool). 520 identical API calls is an
+# I/O fan-out, not a reasoning task — threads beat sub-agents. Conservative default
+# to stay under Opus rate limits; the SDK's built-in retries handle transient 429s.
+CONCURRENCY  = 6
+# $ per MTok (input, output) for the rough cost log (audit #15). Opus 4.8 / Sonnet 5.
+PRICE = {"claude-opus-4-8": (5.0, 25.0), "claude-sonnet-5": (2.0, 10.0)}
 # Only the filings actually worth investigating — the ambiguous, high-signal flags.
 TARGET_TIERS = ("ALERT", "FLAG")
+
+
+def _cost(model: str, in_tok: int, out_tok: int) -> float:
+    pin, pout = PRICE.get(model, (0.0, 0.0))
+    return in_tok / 1e6 * pin + out_tok / 1e6 * pout
 
 
 # ── pure helpers (unit-testable, no BQ/LLM) ─────────────────────────────────
@@ -186,6 +197,7 @@ def main() -> None:
     ap.add_argument("--ticker", help="Only this ticker (idempotent: replaces its rows)")
     ap.add_argument("--limit", type=int, help="Cap filings processed (cheap live test)")
     ap.add_argument("--model", default=MODEL, help=f"Proposer model (default {MODEL}); use to A/B tiers")
+    ap.add_argument("--concurrency", type=int, default=CONCURRENCY, help=f"Parallel proposer calls (default {CONCURRENCY})")
     ap.add_argument("--full-refresh", action="store_true", help="Rebuild the whole table")
     ap.add_argument("--dry-run", action="store_true", help="Count filings, no LLM/write")
     args = ap.parse_args()
@@ -205,15 +217,18 @@ def main() -> None:
         _delete_ticker(bq, args.ticker)   # idempotent targeted rerun
 
     import anthropic
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     llm = anthropic.Anthropic()
     generated_at = datetime.now(timezone.utc)
     out: list[dict] = []
     ok = fail = 0
+    in_tok = out_tok = 0
     uploaded_any = False
 
     def flush() -> None:
-        # First flush honours --full-refresh (TRUNCATE); later flushes must APPEND,
-        # or they would wipe earlier flushes. Incremental skip lets a rerun resume.
+        # First flush honours --full-refresh (TRUNCATE); later flushes APPEND (else
+        # they wipe earlier flushes). Runs only on the main thread, so `out` needs no
+        # lock. Incremental skip lets a rerun resume after a crash.
         nonlocal uploaded_any
         if not out:
             return
@@ -221,24 +236,42 @@ def main() -> None:
         uploaded_any = True
         out.clear()
 
-    for i, (_, row) in enumerate(flags.iterrows(), 1):
+    def _process(row):
         flag = flag_from_row(row)
         try:
-            graph = propose_branches(llm, flag, n=N_BRANCHES, model=args.model)
-            if not graph.branches:
+            graph, usage = propose_branches(llm, flag, n=N_BRANCHES, model=args.model, return_usage=True)
+            return ("ok" if graph.branches else "empty", flag, row, graph.branches, usage)
+        except Exception as e:   # one bad filing must not lose the batch (findings #7)
+            return ("error", flag, row, e, None)
+
+    rows = [row for _, row in flags.iterrows()]
+    print(f"Proposing with concurrency={args.concurrency} …")
+    done = 0
+    # Threads, not sub-agents: 520 identical API calls is I/O fan-out. Only the
+    # main thread touches `out`/counters/BQ, so no locking is needed.
+    with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
+        futures = [ex.submit(_process, r) for r in rows]
+        for fut in as_completed(futures):
+            status, flag, row, payload, usage = fut.result()
+            done += 1
+            if usage:
+                in_tok += usage["input_tokens"]; out_tok += usage["output_tokens"]
+            if status == "ok":
+                out.extend(branch_rows(flag, payload, row, generated_at, model=args.model))
+                ok += 1
+            elif status == "empty":
                 print(f"  WARN {flag.ticker} @ {flag.report_date}: 0 branches (will retry next run)")
-                continue
-            out.extend(branch_rows(flag, graph.branches, row, generated_at, model=args.model))
-            ok += 1
-        except Exception as e:  # one bad filing must not lose the batch (findings #7)
-            fail += 1
-            print(f"  ERROR {flag.ticker} @ {flag.report_date}: {type(e).__name__}: {e}")
-        if i % FLUSH_EVERY == 0:
-            flush()
-            print(f"  … checkpoint at {i}/{len(flags)}  (ok={ok} fail={fail})")
+            else:
+                fail += 1
+                print(f"  ERROR {flag.ticker} @ {flag.report_date}: {type(payload).__name__}: {payload}")
+            if done % FLUSH_EVERY == 0:
+                flush()
+                print(f"  … {done}/{len(rows)}  ok={ok} fail={fail}  "
+                      f"tok in={in_tok} out={out_tok}  ~${_cost(args.model, in_tok, out_tok):.2f}")
 
     flush()
-    print(f"Done. filings ok={ok} fail={fail}. Rerun resumes any failures via incremental skip.")
+    print(f"Done. ok={ok} fail={fail}. tokens in={in_tok} out={out_tok}. "
+          f"est cost ~${_cost(args.model, in_tok, out_tok):.2f}. Rerun resumes failures via incremental skip.")
 
 
 if __name__ == "__main__":

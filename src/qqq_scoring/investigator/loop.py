@@ -20,6 +20,7 @@ output quality; it does not *close* the loop, so it's a later slice.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -102,6 +103,8 @@ def run_investigation(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     investigation_cap: int = DEFAULT_INVESTIGATION_CAP,
     repair_cap: int = DEFAULT_REPAIR_CAP,
+    max_seconds: float | None = None,   # wall-clock guard (eval #2): bound latency so a
+    #                                     rate-limit/retry storm can't run 38 minutes.
 ) -> TerminalResult:
     """Run one investigation to termination and return the outcome.
 
@@ -125,8 +128,16 @@ def run_investigation(
     # behind the investigation budget. Summing them would hand repair headroom to a
     # no-judge run that can never repair.
     ceiling = investigation_cap
+    started = time.monotonic()
 
     while turns < ceiling:
+        # Wall-clock guard (eval #2): bail before a rate-limit/retry storm turns one
+        # investigation into a 38-minute run. Terminates CAP_REACHED (budget exhausted)
+        # carrying the last verdict, exactly like the turn ceiling.
+        if max_seconds is not None and (time.monotonic() - started) > max_seconds:
+            return TerminalResult(
+                TerminalReason.CAP_REACHED, turns, last_answer, tool_calls, messages, evidence, last_verdict
+            )
         turns += 1
         resp = client.messages.create(
             model=model,

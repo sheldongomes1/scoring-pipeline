@@ -209,6 +209,15 @@ def test_unknown_tool_name_fails_loud():
     raise AssertionError("dispatch of an unknown tool name should raise KeyError")
 
 
+def test_wall_clock_guard_bails_before_running():
+    """eval #2: a passed deadline terminates CAP_REACHED before spending a turn."""
+    client = ScriptedClient([_tool_use_turn(offset=1)], repeat_last=True)  # would loop forever
+    res = run_investigation(client, _registry(), "task", max_seconds=0)
+    assert res.reason is TerminalReason.CAP_REACHED
+    assert res.iterations == 0
+    assert client.calls == []   # guard tripped before any model call
+
+
 def _run() -> None:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for t in tests:

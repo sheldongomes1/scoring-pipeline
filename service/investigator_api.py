@@ -319,7 +319,9 @@ def investigate(req: InvestigateRequest, x_api_token: str | None = Header(defaul
         started = time.monotonic()
         # Single-branch deep-dive only (MVP): one click = one run_branch. No
         # auto-expand — recursive tree growth stays a deliberate, human-steered step.
-        run_branch(branch, flag, Anthropic(), _registry(), _judge(), system=SYSTEM)
+        # max_seconds=240 keeps the investigation under Cloud Run's 300s request
+        # timeout (eval #2 wall-clock guard) — it returns CAP_REACHED rather than a 504.
+        run_branch(branch, flag, Anthropic(), _registry(), _judge(), system=SYSTEM, max_seconds=240)
         return build_response_dto(branch, flag, time.monotonic() - started)
     except HTTPException:
         raise

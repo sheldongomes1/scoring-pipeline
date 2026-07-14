@@ -192,6 +192,7 @@ def run_branch(
     judge: Any,
     *,
     system: str = "",
+    max_seconds: float | None = None,   # wall-clock guard, passed through (eval #2)
 ) -> Branch:
     """Steer into one branch: run the EXISTING loop with the branch's predicate.
 
@@ -204,7 +205,8 @@ def run_branch(
         f"Investigate this specific hypothesis and resolve it:\n{branch.predicate}"
     )
     result = run_investigation(
-        generator, registry, task, judge=judge, predicate=branch.predicate, system=system
+        generator, registry, task, judge=judge, predicate=branch.predicate,
+        system=system, max_seconds=max_seconds,
     )
     branch.result = result
     branch.status = _STATUS_FROM_REASON.get(result.reason, BranchStatus.INCONCLUSIVE)

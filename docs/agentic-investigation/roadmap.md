@@ -2,6 +2,22 @@
 
 > **CURRENT POSITION (update this block every session before closing):**
 >
+> - **Date:** 2026-07-14
+> - **Phase:** FULLY REAL & DEPLOYED. Loop + judge + disambiguation graph + tree
+>   (ADR-1…14, 93 tests). All 3 tools read GOLDEN SOURCES: feature_history→BigQuery,
+>   narrative_sections→GCS filings, balance_sheet_items→SEC EDGAR companyfacts (no
+>   fixtures in the served set). Batch (520 flags → investigation_branches, prod BQ);
+>   UI disambiguation graph (redink-ui 5a); live deep-dive service (5b) DEPLOYED to
+>   Cloud Run rev 00003 (signal-intel-prod, token-gated). Fable audit + health check
+>   fully worked through: the grounding-ENFORCEMENT gap is closed
+>   (`TerminalResult.trusted` — only RESOLVED/INCONCLUSIVE surface as findings; UI
+>   shows a "not grounding-verified" banner for capped/abandoned; cap raised 5→12 so
+>   repair is reachable; `max_seconds` wall-clock guard). Phase 6 eval in qqq-eval-suite
+>   (Fable independent judge, forced-tool verdicts, `result_trusted` check). IN FLIGHT:
+>   re-measuring the 6-ticker eval now that all tools are real + cap=12. OPEN: interview
+>   (deferred by user); feature_keys.json upstream drift ([[known_gaps]]); EDGAR
+>   total_debt may exclude short-term borrowings for some filers (CFA caveat in-module).
+> - **[historical notes below, oldest first]**
 > - **Date:** 2026-07-05
 > - **Phase:** 2 — Single-branch agent loop (in progress; harness proven, live run next).
 > - **Landed so far:** ADR-1 (agentic line + termination + budget), ADR-2

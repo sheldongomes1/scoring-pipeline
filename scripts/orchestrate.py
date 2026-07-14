@@ -149,6 +149,14 @@ STEPS = [
         "depends_on": [8],                          # needs analyst_actions.key_question + filing_intelligence flags
         "note":       "BATCH half of the disambiguation graph: propose_branches per ALERT/FLAG filing → BQ investigation_branches (roots the interactive redink-ui service consumes). Agentic Investigator ADR-8/Phase-5.",
     },
+    {
+        "num":        11,
+        "name":       "Ingest EDGAR balance-sheet line items → balance_sheet_items",
+        "script":     "scripts/ingest_balance_sheet.py",
+        "args":       [],
+        "depends_on": [1],                          # universe ticker list from period_features
+        "note":       "Persist SEC EDGAR companyfacts balance-sheet line items to BQ so the investigator's balance_sheet_bq tool reads a fast table instead of live EDGAR (latency fix). Agentic Investigator tool #3 persistence.",
+    },
 ]
 
 

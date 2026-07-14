@@ -29,8 +29,8 @@ from qqq_scoring.investigator.registry import ToolBinding, ToolRegistry  # noqa:
 from qqq_scoring.investigator.tools import balance_sheet as bs  # noqa: E402
 from qqq_scoring.investigator.tools import feature_history as fh  # noqa: E402
 from qqq_scoring.investigator.tools import narrative_sections as ns  # noqa: E402
-from qqq_scoring.investigator.tools.balance_sheet_edgar import SOURCE as BS_SOURCE  # noqa: E402
-from qqq_scoring.investigator.tools.balance_sheet_edgar import balance_sheet_items as bs_edgar  # noqa: E402
+from qqq_scoring.investigator.tools.balance_sheet_bq import SOURCE as BS_SOURCE  # noqa: E402
+from qqq_scoring.investigator.tools.balance_sheet_bq import balance_sheet_items as bs_backend  # noqa: E402
 from qqq_scoring.investigator.tools.feature_history_bq import SOURCE as FH_SOURCE  # noqa: E402
 from qqq_scoring.investigator.tools.feature_history_bq import feature_history_bq  # noqa: E402
 from qqq_scoring.investigator.tools.narrative_sections_gcs import narrative_sections_gcs  # noqa: E402

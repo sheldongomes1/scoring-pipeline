@@ -49,8 +49,8 @@ from qqq_scoring.investigator.registry import ToolBinding, ToolRegistry  # noqa:
 from qqq_scoring.investigator.tools import balance_sheet as bs  # noqa: E402
 from qqq_scoring.investigator.tools import feature_history as fh  # noqa: E402
 from qqq_scoring.investigator.tools import narrative_sections as ns  # noqa: E402
-from qqq_scoring.investigator.tools.balance_sheet_edgar import SOURCE as BS_SOURCE  # noqa: E402
-from qqq_scoring.investigator.tools.balance_sheet_edgar import balance_sheet_items as balance_sheet_edgar  # noqa: E402
+from qqq_scoring.investigator.tools.balance_sheet_bq import SOURCE as BS_SOURCE  # noqa: E402
+from qqq_scoring.investigator.tools.balance_sheet_bq import balance_sheet_items as balance_sheet_backend  # noqa: E402
 from qqq_scoring.investigator.tools.contracts import GroundingMode  # noqa: E402
 from qqq_scoring.investigator.tools.feature_history_bq import SOURCE as FH_SOURCE  # noqa: E402
 from qqq_scoring.investigator.tools.feature_history_bq import feature_history_bq  # noqa: E402
@@ -196,7 +196,7 @@ def _registry() -> ToolRegistry:
         ToolBinding("feature_history", feature_history_bq, fh.tool_definition(_live_feature_keys()),
                     fh.parse_model_input, fh.to_model_content),
         # REAL SEC EDGAR companyfacts backend (ADR-9 fake→real swap; zero loop/judge code changes).
-        ToolBinding("balance_sheet_items", balance_sheet_edgar, bs.tool_definition(bs.ITEM_KEYS),
+        ToolBinding("balance_sheet_items", balance_sheet_backend, bs.tool_definition(bs.ITEM_KEYS),
                     bs.parse_model_input, bs.to_model_content),
         ToolBinding("narrative_sections", narrative_sections_gcs, ns.tool_definition(ns.SECTION_KEYS),
                     ns.parse_model_input, ns.to_model_content),
@@ -209,7 +209,7 @@ def _judge():
     # Source-routed reverify map (ADR-9): each structured backend keyed by the
     # source its evidence carries. feature_history re-fetches against the REAL
     # table, balance_sheet against REAL EDGAR — grounding replays the request (ADR-13).
-    return Judge(client=Anthropic(), reverify={FH_SOURCE: feature_history_bq, BS_SOURCE: balance_sheet_edgar})
+    return Judge(client=Anthropic(), reverify={FH_SOURCE: feature_history_bq, BS_SOURCE: balance_sheet_backend})
 
 
 def _evidence_view(evidence: list) -> list[dict]:

@@ -273,3 +273,36 @@ def balance_sheet_items(
         else:
             results.append(FeatureResult(item, FeatureStatus.FOUND, value, prov, periods_skipped=periods_skipped))
     return results
+
+
+def extract_all(ticker: str, items: list[str] | None = None, *, fetcher=None) -> list[dict]:
+    """Ingestion primitive: EVERY filed period's line items for a ticker, from ONE
+    companyfacts fetch. Returns rows for the BQ `balance_sheet_items` table:
+    `{ticker, target_period_end: date, target_form, accession_number, <item>: value|None}`.
+    Reuses the same concept selection + as-originally-filed rule as the live tool, so
+    the BQ-backed tool resolves over an axis identical to what the live tool produced."""
+    items = items or list(_CONCEPTS)
+    cik = _cik_for(ticker, fetcher)
+    if not cik:
+        return []
+    gaap = _get_json(_FACTS_URL.format(cik=cik), _FACTS_TTL, fetcher).get("facts", {}).get("us-gaap", {})
+    quarterly, annual = _period_axis(gaap, "10-Q")
+
+    rows: list[dict] = []
+    for form_label, dates in (("10-Q", quarterly), ("10-K", annual)):
+        for d in dates:
+            end_iso = d.isoformat()
+            row: dict = {"ticker": ticker, "target_period_end": d, "target_form": form_label}
+            accn = None
+            for item in items:
+                val = None
+                for concept in _CONCEPTS[item]:
+                    hits = [f for f in _usd_facts(gaap, concept) if f["end"] == end_iso]
+                    if hits:
+                        fact = _original(hits)
+                        val, accn = float(fact["val"]), (accn or fact.get("accn"))
+                        break
+                row[item] = val
+            row["accession_number"] = accn
+            rows.append(row)
+    return rows

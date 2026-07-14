@@ -23,7 +23,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 
 from .judge import Confirm, JudgeVerdict
 from .registry import ToolRegistry
@@ -91,6 +91,48 @@ def _text_from(content: Any) -> str:
     return "\n".join(parts).strip()
 
 
+def _emit(on_event: Callable[[dict], None] | None, event: dict) -> None:
+    """Fire the optional step-stream observer. An observer failure must NEVER
+    alter the investigation (it is a spectator, not a participant), so any
+    exception it raises is swallowed here."""
+    if on_event is None:
+        return
+    try:
+        on_event(event)
+    except Exception:  # noqa: BLE001 — observers cannot break the loop
+        pass
+
+
+def _tool_call_summary(name: str, model_input: Any) -> str:
+    """Short human-facing description of a tool call for the step stream.
+
+    Built ONLY from the model's own tool_use input (its request), never from tool
+    output or provenance — the same no-leak discipline as the DTO (ADR-5).
+    e.g. 'feature_history: equity_multiplier @ 2023-04-30 (-4q)'."""
+    try:
+        parts: list[str] = []
+        # The subject of the request: features / items / sections list.
+        for key in ("features", "items", "sections"):
+            v = model_input.get(key)
+            if isinstance(v, list) and v:
+                subject = ", ".join(str(s) for s in v[:4])
+                if len(v) > 4:
+                    subject += f" (+{len(v) - 4} more)"
+                parts.append(subject)
+                break
+        rd = model_input.get("report_date")
+        if rd:
+            anchor = f"@ {rd}"
+            offset = model_input.get("period_offset")
+            if isinstance(offset, int) and offset:
+                anchor += f" ({offset:+d}q)"
+            parts.append(anchor)
+        detail = " ".join(parts)[:160]
+        return f"{name}: {detail}" if detail else name
+    except Exception:  # noqa: BLE001 — a summary failure must not break dispatch
+        return name
+
+
 def _repair_prompt(verdict: JudgeVerdict) -> str:
     items = ", ".join(verdict.ungrounded_items) or "one or more figures"
     return (
@@ -122,6 +164,12 @@ def run_investigation(
     repair_cap: int = DEFAULT_REPAIR_CAP,
     max_seconds: float | None = None,   # wall-clock guard (eval #2): bound latency so a
     #                                     rate-limit/retry storm can't run 38 minutes.
+    on_event: Callable[[dict], None] | None = None,  # OPTIONAL step-stream observer —
+    #   called with small human-facing dicts ({"type": "turn"|"tool"|"tool_result"|
+    #   "grounding"|"verdict", ...}) as the loop progresses, so a caller can stream
+    #   progress (SSE) instead of blanking for the whole run. Pure observer: when
+    #   None (the default — eval harness, batch, existing endpoint) behavior and
+    #   return value are byte-identical to before this hook existed.
 ) -> TerminalResult:
     """Run one investigation to termination and return the outcome.
 
@@ -130,6 +178,33 @@ def run_investigation(
     model's `end_turn` becomes a *proposal* the judge adjudicates (ADR-6). With no
     judge, `end_turn` is terminal (ADR-4) and the reason is `MODEL_STOPPED`.
     """
+    result = _run_loop(
+        client, registry, task, judge=judge, predicate=predicate, system=system,
+        model=model, max_tokens=max_tokens, investigation_cap=investigation_cap,
+        repair_cap=repair_cap, max_seconds=max_seconds, on_event=on_event,
+    )
+    # One terminal event regardless of WHICH return path ended the loop.
+    _emit(on_event, {"type": "verdict", "status": result.reason.value, "trusted": result.trusted})
+    return result
+
+
+def _run_loop(
+    client: Any,
+    registry: ToolRegistry,
+    task: str,
+    *,
+    judge: Any = None,
+    predicate: str | None = None,
+    system: str = "",
+    model: str = DEFAULT_MODEL,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    investigation_cap: int = DEFAULT_INVESTIGATION_CAP,
+    repair_cap: int = DEFAULT_REPAIR_CAP,
+    max_seconds: float | None = None,
+    on_event: Callable[[dict], None] | None = None,
+) -> TerminalResult:
+    """The loop body (see `run_investigation`). Split out so the terminal `verdict`
+    event can be emitted exactly once around the loop's several return points."""
     messages: list[dict] = [{"role": "user", "content": task}]
     tools = registry.tool_definitions()
     evidence: list[Any] = []
@@ -156,6 +231,7 @@ def run_investigation(
                 TerminalReason.CAP_REACHED, turns, last_answer, tool_calls, messages, evidence, last_verdict
             )
         turns += 1
+        _emit(on_event, {"type": "turn", "n": turns})
         resp = client.messages.create(
             model=model,
             max_tokens=max_tokens,
@@ -177,8 +253,25 @@ def run_investigation(
                 if getattr(block, "type", None) != "tool_use":
                     continue
                 tool_calls += 1
+                _emit(on_event, {
+                    "type": "tool",
+                    "name": block.name,
+                    "summary": _tool_call_summary(block.name, block.input),
+                })
                 outcome = registry.dispatch(block.name, block.input)
                 evidence.extend(outcome.raw_results)   # full envelope -> judge (ADR-5)
+                # Status only (found / period_not_filed / ...), never payloads —
+                # the step stream is human-facing, not a data channel (ADR-5).
+                statuses: list[str] = []
+                for r in outcome.raw_results:
+                    s = getattr(getattr(r, "status", None), "value", None)
+                    if s and s not in statuses:
+                        statuses.append(s)
+                _emit(on_event, {
+                    "type": "tool_result",
+                    "name": block.name,
+                    "status": "; ".join(statuses) if statuses else "ok",
+                })
                 tool_result_blocks.append(
                     {
                         "type": "tool_result",
@@ -199,8 +292,19 @@ def run_investigation(
             )
 
         # ADR-6: the judge adjudicates the proposal. Grounding (G) gates first.
+        _emit(on_event, {"type": "grounding", "status": "checking", "facts": len(evidence)})
         verdict: JudgeVerdict = judge.evaluate(predicate or task, last_answer, evidence)
         last_verdict = verdict
+        if verdict.grounded:
+            _emit(on_event, {"type": "grounding", "status": "verified", "facts": len(evidence)})
+        else:
+            # Item names only (the same strings the repair prompt shows the model) —
+            # no provenance receipts.
+            _emit(on_event, {
+                "type": "grounding",
+                "status": "failed",
+                "reasons": list(verdict.ungrounded_items)[:5],
+            })
 
         if not verdict.grounded:
             # ADR-13: an INTEGRITY failure (re-fetch mismatch / missing backend) is a

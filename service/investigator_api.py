@@ -29,21 +29,30 @@ See service/README.md for the Cloud Run deploy sketch.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import queue
 import sys
 import threading
 import time
+from collections.abc import AsyncIterator
 from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
-from qqq_scoring.investigator.graph import Branch, Flag, run_branch  # noqa: E402
+from qqq_scoring.investigator.graph import Branch, BranchStatus, Flag, run_branch  # noqa: E402
+# Read-only reuse of run_branch's terminal-state map so the streaming shim below
+# can never drift from graph.run_branch's own mapping. graph.py itself is not
+# modified (owned by a parallel workstream this cycle).
+from qqq_scoring.investigator.graph import _STATUS_FROM_REASON  # noqa: E402
+from qqq_scoring.investigator.loop import run_investigation  # noqa: E402
 from qqq_scoring.investigator.judge import Judge  # noqa: E402
 from qqq_scoring.investigator.registry import ToolBinding, ToolRegistry  # noqa: E402
 from qqq_scoring.investigator.tools import balance_sheet as bs  # noqa: E402
@@ -335,3 +344,127 @@ def investigate(req: InvestigateRequest, x_api_token: str | None = Header(defaul
         raise HTTPException(status_code=500, detail=f"investigation failed: {type(exc).__name__}")
     finally:
         _slots.release()
+
+
+# ── streaming endpoint (SSE) ─────────────────────────────────────────────────
+# Same investigation, same DTO — but the ~150s wait becomes LEGIBLE: each loop
+# step (turn / tool call / tool result / grounding / verdict) is framed as an SSE
+# `data:` event as it happens, and the final frame is {"type": "result", ...} with
+# the EXACT DTO the non-streaming endpoint returns (build_response_dto). The
+# non-streaming POST /investigate above is unchanged (backward compat + fallback).
+
+
+def _run_branch_streaming(branch, flag, generator, registry, judge, *, system, max_seconds, on_event):
+    """Mirror of graph.run_branch with the loop's `on_event` hook threaded through.
+
+    graph.py is frozen this cycle (owned by a parallel workstream), so the
+    two-line wrapper is mirrored here byte-for-byte — same task string, same
+    terminal-state map (imported from graph, not copied). When graph.py reopens,
+    add an `on_event` passthrough to run_branch and delete this shim."""
+    branch.status = BranchStatus.INVESTIGATING
+    task = (
+        f"Flagged filing: {flag.ticker} {flag.form} @ {flag.report_date}. {flag.summary}\n"
+        f"Investigate this specific hypothesis and resolve it:\n{branch.predicate}"
+    )
+    result = run_investigation(
+        generator, registry, task, judge=judge, predicate=branch.predicate,
+        system=system, max_seconds=max_seconds, on_event=on_event,
+    )
+    branch.result = result
+    branch.status = _STATUS_FROM_REASON.get(result.reason, BranchStatus.INCONCLUSIVE)
+    return branch
+
+
+# Emit an SSE comment when the loop has been silent this long, so intermediaries
+# (Cloud Run, the Next.js proxy) never see a dead connection mid-investigation.
+HEARTBEAT_SECONDS = 10.0
+
+
+@app.post("/investigate/stream")
+async def investigate_stream(
+    req: InvestigateRequest, x_api_token: str | None = Header(default=None)
+) -> StreamingResponse:
+    # Same gates as POST /investigate (auth, key, date, concurrency) — a stream
+    # costs the same real Opus+Sonnet spend as a blocking call.
+    expected = os.environ.get("INVESTIGATOR_API_TOKEN")
+    if expected and x_api_token != expected:
+        raise HTTPException(status_code=401, detail="invalid or missing X-Api-Token")
+
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured on the service")
+
+    try:
+        report_date = date.fromisoformat(req.report_date)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"report_date must be YYYY-MM-DD, got {req.report_date!r}")
+
+    if not _slots.acquire(blocking=False):
+        raise HTTPException(
+            status_code=429,
+            detail=f"investigator busy ({MAX_CONCURRENT} deep-dives already running); retry shortly",
+        )
+
+    # run_branch is synchronous/blocking, so it runs in a worker thread; the loop's
+    # on_event hook pushes events onto this queue and the async generator below
+    # drains it into SSE frames. `None` is the close sentinel.
+    events: queue.Queue[dict | None] = queue.Queue()
+
+    def work() -> None:
+        try:
+            # Flag reconstruction (a BQ query) happens HERE, not in the endpoint
+            # body, so response headers flush immediately and the wait is visible.
+            summary = req.flag_summary or _reconstruct_flag_summary(req.ticker, report_date) or (
+                f"Filing flagged by the anomaly screen ({req.calendar_quarter or report_date.isoformat()}). "
+                f"key_question: why is this filing anomalous, and will the anomaly persist?"
+            )
+            flag = Flag(ticker=req.ticker, report_date=report_date, form=req.form, summary=summary)
+            branch = Branch(
+                id=req.branch_id,
+                hypothesis=req.hypothesis,
+                rationale=req.rationale,
+                predicate=req.predicate,
+            )
+
+            from anthropic import Anthropic
+
+            started = time.monotonic()
+            _run_branch_streaming(
+                branch, flag, Anthropic(), _registry(), _judge(),
+                system=SYSTEM, max_seconds=240, on_event=events.put,
+            )
+            # Final frame: the SAME DTO shape POST /investigate returns.
+            events.put({"type": "result", **build_response_dto(branch, flag, time.monotonic() - started)})
+        except Exception as exc:  # noqa: BLE001 — clean error frame, never a stack trace
+            print(f"[investigator_api] streaming investigation failed for {req.ticker}/{req.branch_id}: {exc}")
+            events.put({"type": "error", "detail": f"investigation failed: {type(exc).__name__}"})
+        finally:
+            events.put(None)   # close sentinel for the SSE generator
+            _slots.release()   # the WORKER owns release — runs even if the client disconnects
+
+    # Started here (not inside the generator) so the semaphore is always paired
+    # with a worker that releases it, even if the response is never consumed.
+    threading.Thread(target=work, name=f"investigate-stream-{req.branch_id}", daemon=True).start()
+
+    async def sse() -> AsyncIterator[str]:
+        loop = asyncio.get_running_loop()
+        yield ": stream open\n\n"   # flush headers/first bytes immediately
+        while True:
+            try:
+                # Block in the default executor (not the event loop) for up to one
+                # heartbeat interval, then emit a comment to keep the pipe warm.
+                event = await loop.run_in_executor(None, events.get, True, HEARTBEAT_SECONDS)
+            except queue.Empty:
+                yield ": keep-alive\n\n"
+                continue
+            if event is None:
+                return
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        sse(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",   # tell buffering proxies to pass frames through
+        },
+    )

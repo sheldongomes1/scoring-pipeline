@@ -14,6 +14,7 @@ starving investigations; this backend gives the agent actual management prose.
 from __future__ import annotations
 
 import json
+import threading
 from datetime import date, datetime, timezone
 
 from .contracts import NarrativeProvenance, NarrativeResult, NarrativeStatus
@@ -21,6 +22,23 @@ from .contracts import NarrativeProvenance, NarrativeResult, NarrativeStatus
 _BUCKET = "qqq-anomaly-raw-sg"
 _PREFIX = "qqq/narrative"
 SOURCE = "gs://qqq-anomaly-raw-sg/qqq/narrative"
+
+# Module-level shared client (latency #3): a fresh storage.Client() per call throws
+# away auth/discovery each time. Built lazily+once, thread-safe, and only when no
+# client is injected (tests still pass their own fake untouched).
+_CLIENT = None
+_CLIENT_LOCK = threading.Lock()
+
+
+def _shared_client():
+    global _CLIENT
+    if _CLIENT is None:
+        with _CLIENT_LOCK:
+            if _CLIENT is None:
+                from google.cloud import storage  # lazy import so the module loads without creds
+
+                _CLIENT = storage.Client()
+    return _CLIENT
 
 
 def _find_blob(bucket, ticker: str, report_date: date, form: str):
@@ -47,9 +65,7 @@ def narrative_sections_gcs(
     client=None,
 ) -> list[NarrativeResult]:
     """Drop-in for `narrative_sections_fake` — reads real GCS narrative JSON."""
-    from google.cloud import storage  # lazy import so the module loads without creds
-
-    client = client or storage.Client()
+    client = client or _shared_client()
     bucket = client.bucket(_BUCKET)
     retrieved_at = datetime.now(timezone.utc)
 

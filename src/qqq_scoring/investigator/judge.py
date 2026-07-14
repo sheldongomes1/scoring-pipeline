@@ -20,6 +20,7 @@ The judge is the first consumer of the receipts ADR-5 withheld from the generato
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date
 from enum import Enum
@@ -137,6 +138,10 @@ def _grounding_tool() -> dict:
 
 
 class Judge:
+    # Sentinel for "no reverify backend for this source" cached in the memo, kept
+    # distinct from a legitimately-cached None (feature absent from the fresh row).
+    _NO_BACKEND = object()
+
     def __init__(self, client: Any, reverify: "ReverifyFn | dict[str, ReverifyFn]", model: str = JUDGE_MODEL) -> None:
         self._client = client       # the judge MODEL client (C, O only)
         # Deterministic re-fetch backend(s) for G (ADR-9). A single callable is the
@@ -147,11 +152,103 @@ class Judge:
         # hidden one-backend assumption the 2nd structured tool exposed).
         self._reverify = reverify
         self._model = model
+        # Session-level reverify memo (latency #2): keyed by full re-fetch identity
+        # (source, ticker, requested_report_date, requested_offset, feature) → the
+        # fresh source-side FeatureResult (or None / _NO_BACKEND). Evidence accumulates
+        # across a run's continue/repair cycles, so `evaluate()` was re-grounding pass
+        # 1's items again on pass 2. This cache makes each identity re-fetched at most
+        # ONCE per Judge instance. It caches only the SOURCE truth, never the
+        # generator's (possibly tampered) value, so tamper detection is unaffected.
+        self._verify_cache: dict = {}
 
     def _backend_for(self, item) -> "ReverifyFn | None":
         if callable(self._reverify):
             return self._reverify
         return self._reverify.get(item.provenance.source)
+
+    def _reverify_deterministic(self, deterministic: list) -> tuple[list[str], bool]:
+        """INTEGRITY head of G, batched + memoized. Returns (failed_items, det_failure).
+
+        Semantics are byte-identical to the original per-item loop — each deterministic
+        item is re-fetched by replaying its EXACT request (requested_report_date +
+        requested_offset, routed by provenance.source) and compared on (status, value).
+        Only the QUERY COUNT changes:
+          * de-dup by re-fetch identity, first-seen order (audit #12);
+          * skip anything already re-verified this run (session memo, latency #2);
+          * fold all of a (source, ticker)'s remaining probes into ONE query when the
+            backend exposes `.batch` — the backend already pulls the ticker's whole
+            history, so one round-trip grounds every offset (latency #1);
+          * fetch the (source, ticker) groups in parallel (latency #4).
+        The failed list is built by iterating the de-duped items in first-seen order,
+        so its contents/order do NOT depend on thread scheduling."""
+        # 1) De-dup by identity, preserving first-seen order.
+        unique: list[tuple[tuple, Any]] = []
+        seen: set = set()
+        for item in deterministic:
+            p = item.provenance
+            identity = (p.source, p.ticker, p.requested_report_date, p.requested_offset, item.feature)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            unique.append((identity, item))
+
+        # 2) Group the not-yet-memoized identities by (source, ticker) for batched fetch.
+        groups: dict[tuple[str, str], list[tuple[tuple, Any]]] = {}
+        for identity, item in unique:
+            if identity in self._verify_cache:
+                continue
+            groups.setdefault((item.provenance.source, item.provenance.ticker), []).append((identity, item))
+
+        # 3) Fetch each group; parallelize across groups (distinct sources/tickers).
+        def _fetch(key_members: tuple) -> tuple:
+            (source, ticker), members = key_members
+            backend = self._backend_for(members[0][1])
+            if backend is None:
+                return key_members[0], None  # no reverify backend for this source
+            # One probe per (requested_report_date, requested_offset); features batched.
+            by_probe: dict[tuple, list[str]] = {}
+            for _identity, it in members:
+                pp = it.provenance
+                by_probe.setdefault((pp.requested_report_date, pp.requested_offset), []).append(it.feature)
+            batch = getattr(backend, "batch", None)
+            if batch is not None:
+                grouped = batch(ticker, [(rd, off, feats) for (rd, off), feats in by_probe.items()])
+            else:
+                # Plain callables / fakes / injected lambdas: per-(rd, off) call, features batched.
+                grouped = {(rd, off): backend(ticker, rd, off, list(feats)) for (rd, off), feats in by_probe.items()}
+            return key_members[0], grouped
+
+        if len(groups) > 1:
+            with ThreadPoolExecutor(max_workers=len(groups)) as pool:
+                fetched = list(pool.map(_fetch, groups.items()))
+        else:
+            fetched = [_fetch(kv) for kv in groups.items()]
+
+        # 4) Fold fetch results into the session memo, keyed by full identity.
+        for key, grouped in fetched:
+            for identity, item in groups[key]:
+                if grouped is None:
+                    self._verify_cache[identity] = self._NO_BACKEND
+                    continue
+                pp = item.provenance
+                fresh_list = grouped.get((pp.requested_report_date, pp.requested_offset), [])
+                self._verify_cache[identity] = next((r for r in fresh_list if r.feature == item.feature), None)
+
+        # 5) Compare — first-seen order, byte-identical to the per-item path.
+        failed: list[str] = []
+        deterministic_failure = False
+        for identity, item in unique:
+            cached = self._verify_cache.get(identity)
+            prov = item.provenance
+            if cached is self._NO_BACKEND:
+                failed.append(f"{item.feature}@{prov.resolved_report_date} (no reverify backend for {prov.source!r})")
+                deterministic_failure = True
+                continue
+            match = cached
+            if match is None or match.status != item.status or match.value != item.value:
+                failed.append(f"{item.feature}@{prov.resolved_report_date}")
+                deterministic_failure = True
+        return failed, deterministic_failure
 
     # --- G: two-headed, dispatched by the evidence's declared mode (ADR-7) ----
 
@@ -172,31 +269,12 @@ class Judge:
              only ran when narrative evidence happened to exist). A failure here is
              the generator's mis-statement → repairable."""
         deterministic = [e for e in evidence if e.grounding_mode is GroundingMode.DETERMINISTIC]
-        failed: list[str] = []
-        deterministic_failure = False
 
-        # Head 1 — INTEGRITY: replay the exact request and compare. No model call.
-        # Dedupe by re-fetch identity first (audit #12): the same fact accumulates in
-        # `evidence` across continue/repair cycles, and re-verifying it N times is
-        # wasted work + BQ cost (each fetch pulls the ticker's whole history). A
-        # duplicate has identical identity → identical result, so verifying once suffices.
-        seen: set = set()
-        for item in deterministic:
-            prov = item.provenance
-            identity = (prov.source, prov.ticker, prov.requested_report_date, prov.requested_offset, item.feature)
-            if identity in seen:
-                continue
-            seen.add(identity)
-            backend = self._backend_for(item)
-            if backend is None:
-                failed.append(f"{item.feature}@{prov.resolved_report_date} (no reverify backend for {prov.source!r})")
-                deterministic_failure = True
-                continue
-            fresh = backend(prov.ticker, prov.requested_report_date, prov.requested_offset, [item.feature])
-            match = next((r for r in fresh if r.feature == item.feature), None)
-            if match is None or match.status != item.status or match.value != item.value:
-                failed.append(f"{item.feature}@{prov.resolved_report_date}")
-                deterministic_failure = True
+        # Head 1 — INTEGRITY: replay the exact request and compare, byte-identical to
+        # the per-item loop but BATCHED (latency #1) — one query per (source, ticker)
+        # instead of one per feature × offset — and MEMOIZED across evaluate() cycles
+        # (latency #2). See `_reverify_deterministic`.
+        failed, deterministic_failure = self._reverify_deterministic(deterministic)
 
         # Head 2 — ANSWER-SUPPORT: does the answer's every claim follow from the
         # evidence? Always runs (numbers AND prose) — the real anti-hallucination

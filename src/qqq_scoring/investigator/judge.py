@@ -237,7 +237,15 @@ class Judge:
         payload = next((b.input for b in resp.content if getattr(b, "type", None) == "tool_use"), None)
         if payload is None:
             return (False, ["semantic grounding check produced no verdict"])
-        return (bool(payload["supported"]), list(payload["unsupported_claims"]))
+        # Parse defensively: `required` in the tool schema is a hint to the model,
+        # not a runtime guarantee — a "supported: true" verdict routinely omits the
+        # empty `unsupported_claims` array. A missing `supported` key fails closed
+        # (treat as not-supported), matching the no-payload branch above; a missing
+        # claims list is just an empty list. (Was a bare `payload["..."]` → KeyError
+        # → the service's blanket except → 500 that killed the whole investigation.)
+        supported = bool(payload.get("supported", False))
+        unsupported = list(payload.get("unsupported_claims") or [])
+        return (supported, unsupported)
 
     # --- C, O: the judge model ----------------------------------------------
 

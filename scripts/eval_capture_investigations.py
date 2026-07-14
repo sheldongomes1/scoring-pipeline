@@ -34,7 +34,7 @@ from qqq_scoring.investigator.tools.balance_sheet_fake import SOURCE as BS_SOURC
 from qqq_scoring.investigator.tools.balance_sheet_fake import balance_sheet_items as bs_fake  # noqa: E402
 from qqq_scoring.investigator.tools.feature_history_bq import SOURCE as FH_SOURCE  # noqa: E402
 from qqq_scoring.investigator.tools.feature_history_bq import feature_history_bq  # noqa: E402
-from qqq_scoring.investigator.tools.narrative_sections_fake import narrative_sections_fake  # noqa: E402
+from qqq_scoring.investigator.tools.narrative_sections_gcs import narrative_sections_gcs  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 FEATURE_KEYS = json.loads((REPO / "output" / "feature_keys.json").read_text())
@@ -74,7 +74,7 @@ def _registry() -> ToolRegistry:
                     fh.parse_model_input, fh.to_model_content),
         ToolBinding("balance_sheet_items", bs_fake, bs.tool_definition(bs.ITEM_KEYS),
                     bs.parse_model_input, bs.to_model_content),
-        ToolBinding("narrative_sections", narrative_sections_fake, ns.tool_definition(ns.SECTION_KEYS),
+        ToolBinding("narrative_sections", narrative_sections_gcs, ns.tool_definition(ns.SECTION_KEYS),
                     ns.parse_model_input, ns.to_model_content),
     ])
 
@@ -128,7 +128,7 @@ def main() -> None:
                         rationale=row["rationale"], predicate=row["predicate"])
         t0 = time.time()
         try:
-            run_branch(branch, flag, generator, _registry(), judge, system=SYSTEM)
+            run_branch(branch, flag, generator, _registry(), judge, system=SYSTEM, max_seconds=240)
             r = branch.result
             rec = {
                 "trace_id": f"{flag.ticker}_{row['calendar_quarter']}_{branch.id}",
@@ -137,6 +137,7 @@ def main() -> None:
                 "hypothesis": branch.hypothesis, "predicate": branch.predicate,
                 "key_question": row.get("key_question"),
                 "terminal_state": branch.status.value,
+                "trusted": r.trusted,   # did the answer pass grounding cleanly? (Fable health check)
                 "grounded": r.verdict.grounded if r.verdict else None,
                 "confirm": (r.verdict.confirm.value if r.verdict and r.verdict.confirm else None),
                 "open_questions": r.verdict.open_questions if r.verdict else None,

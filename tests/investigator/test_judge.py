@@ -319,6 +319,34 @@ def test_judge_no_payload_fails_closed():
     assert v.open_questions is False   # fail-closed — stop, don't spin
 
 
+def test_resolved_and_inconclusive_are_trusted():
+    """Fable health check: only clean grounding-passed terminals are trusted."""
+    for verdict, reason in [(_resolved_v(), TerminalReason.RESOLVED),
+                            (_inconclusive_v(), TerminalReason.INCONCLUSIVE)]:
+        res = run_investigation(ScriptedClient([_end_turn("answer")]), _registry(),
+                                "task", judge=FakeJudge([verdict]))
+        assert res.reason is reason
+        assert res.trusted is True
+
+
+def test_capped_result_is_not_trusted():
+    """The enforcement seam: a budget-exhausted answer never passed grounding cleanly,
+    so it must NOT be surfaced as a verified finding (Fable health check)."""
+    client = ScriptedClient([_end_turn("prelim")], repeat_last=True)
+    res = run_investigation(client, _registry(), "task",
+                            judge=FakeJudge([_open_v()]), investigation_cap=2)
+    assert res.reason is TerminalReason.CAP_REACHED
+    assert res.trusted is False
+
+
+def test_abandoned_result_is_not_trusted():
+    client = ScriptedClient([_end_turn("ungrounded")], repeat_last=True)
+    res = run_investigation(client, _registry(), "task",
+                            judge=FakeJudge([_ungrounded_v()]), repair_cap=1)
+    assert res.reason is TerminalReason.ABANDONED
+    assert res.trusted is False
+
+
 def test_no_judge_preserves_model_stopped():
     """Regression: with no judge injected, ADR-4 behaviour is unchanged."""
     client = ScriptedClient([_end_turn("done")])

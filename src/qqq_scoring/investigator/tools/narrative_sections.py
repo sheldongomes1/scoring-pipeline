@@ -23,7 +23,10 @@ from .contracts import NarrativeResult
 # Canonical section vocabulary (the narrative-tool analogue of feature_keys). The
 # real list should be sourced from the narrative schema; hardcoded here until the
 # GCS body is wired.
-SECTION_KEYS = ["mdna", "risk_factors", "business_overview", "legal_proceedings"]
+# The real section names in the GCS narrative JSONs (gs://.../narrative/): the
+# `sections` dict has exactly these keys. (The fake fixture predates this and uses
+# its own names; the canonical list matches production.)
+SECTION_KEYS = ["mda", "quantitative_disclosures", "risk_factors"]
 
 
 def narrative_sections(

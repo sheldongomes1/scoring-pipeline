@@ -53,7 +53,7 @@ from qqq_scoring.investigator.tools.balance_sheet_fake import balance_sheet_item
 from qqq_scoring.investigator.tools.contracts import GroundingMode  # noqa: E402
 from qqq_scoring.investigator.tools.feature_history_bq import SOURCE as FH_SOURCE  # noqa: E402
 from qqq_scoring.investigator.tools.feature_history_bq import feature_history_bq  # noqa: E402
-from qqq_scoring.investigator.tools.narrative_sections_fake import narrative_sections_fake  # noqa: E402
+from qqq_scoring.investigator.tools.narrative_sections_gcs import narrative_sections_gcs  # noqa: E402
 
 FEATURE_KEYS = json.loads((REPO / "output" / "feature_keys.json").read_text())
 
@@ -197,7 +197,7 @@ def _registry() -> ToolRegistry:
         # Still fixtures: swap for real reads later; zero loop/judge code changes (ADR-9).
         ToolBinding("balance_sheet_items", balance_sheet_fake, bs.tool_definition(bs.ITEM_KEYS),
                     bs.parse_model_input, bs.to_model_content),
-        ToolBinding("narrative_sections", narrative_sections_fake, ns.tool_definition(ns.SECTION_KEYS),
+        ToolBinding("narrative_sections", narrative_sections_gcs, ns.tool_definition(ns.SECTION_KEYS),
                     ns.parse_model_input, ns.to_model_content),
     ])
 
@@ -258,6 +258,10 @@ def build_response_dto(branch: Branch, flag: Flag, elapsed_seconds: float) -> di
         "branch_id": branch.id,
         "hypothesis": branch.hypothesis,
         "status": branch.status.value,          # resolved | inconclusive | abandoned | capped
+        # `trusted` (Fable health check): did final_text pass the grounding gate on a
+        # clean terminal? False for capped/abandoned — the UI must NOT present an
+        # untrusted answer as a verified conclusion (it may be a rejected/partial one).
+        "trusted": bool(result and result.trusted),
         "final_text": result.final_text if result else "",
         "verdict": verdict,
         "tool_calls": result.tool_calls if result else 0,

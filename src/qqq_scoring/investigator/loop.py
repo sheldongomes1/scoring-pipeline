@@ -30,7 +30,12 @@ from .registry import ToolRegistry
 
 DEFAULT_MODEL = "claude-opus-4-8"  # generator tier (ADR-3)
 DEFAULT_MAX_TOKENS = 2048
-DEFAULT_INVESTIGATION_CAP = 5      # ADR-1 budget: bounds evidence-gathering loops
+# Raised 5→12 (Fable health check): real investigations spend ~4 turns gathering
+# before the first proposal, so at cap=5 the repair loop was UNREACHABLE (repair_cap
+# was dead code) — every real run terminated CAPPED with an ungraded/rejected answer.
+# 12 leaves room for gather → propose → repair. The `max_seconds` wall-clock guard
+# bounds the latency this could add.
+DEFAULT_INVESTIGATION_CAP = 12     # ADR-1 budget: bounds total model turns
 DEFAULT_REPAIR_CAP = 2             # ADR-1 budget: bounds grounding reruns, SEPARATELY
 
 
@@ -63,6 +68,18 @@ class TerminalResult:
     messages: list[dict] = field(default_factory=list)
     evidence: list[Any] = field(default_factory=list)
     verdict: JudgeVerdict | None = None   # the judge's final grade (None on the no-judge path)
+
+    @property
+    def trusted(self) -> bool:
+        """Did `final_text` actually pass the grounding gate on a clean terminal?
+
+        The enforcement seam (Fable health check). ONLY `RESOLVED` and `INCONCLUSIVE`
+        are reached AFTER grounding passed. `CAPPED` (budget exhausted) and
+        `ABANDONED` (grounding failed) carry an answer that was rejected or never
+        finally graded — consumers (UI, DTO, eval) must NOT present it as a verified
+        finding. `MODEL_STOPPED` has no judge at all. This is the boundary that
+        stops an ungrounded capped answer from shipping as a conclusion."""
+        return self.reason in (TerminalReason.RESOLVED, TerminalReason.INCONCLUSIVE)
 
 
 def _text_from(content: Any) -> str:

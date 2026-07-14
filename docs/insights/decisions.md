@@ -881,6 +881,21 @@ model and was not implemented for numbers). Grounding is now explicitly TWO thin
 authenticity (deterministic `==`) AND answer-support (model). The "un-gameable"
 claim applies only to the first.
 
+**AMENDMENT (2026-07-13, Fable health check — re-scoping the guarantee).** ADR-13's
+"won't hallucinate" holds ONLY for the `RESOLVED` and `INCONCLUSIVE` terminals —
+the two reached *after* grounding passes. It does NOT hold for `CAPPED` or
+`ABANDONED`: the first real eval showed grounding *detected* the failures correctly
+(the answer-support head rejected the STX hallucination) but the loop's `CAP_REACHED`
+exit returned the *rejected* answer as the result anyway, and at `investigation_cap=5`
+the repair loop was unreachable (first proposal landed on the last turn), so every
+real investigation terminated CAPPED — the one path with no guarantee. Fixes: (1)
+`TerminalResult.trusted` (True only for RESOLVED/INCONCLUSIVE) is now the enforcement
+seam — the DTO, UI, and eval key off it and never present an untrusted answer as a
+verified finding; (2) `investigation_cap` raised 5→12 so repair is reachable; (3)
+`max_seconds` wall-clock guard bounds the added latency. Lesson: a grounding gate
+that *detects* but doesn't *enforce at every exit* is not a guarantee — audit the
+force-terminated paths, not just the clean ones.
+
 **Consequences:**
 - `contracts.py` `Provenance` +2 fields; all structured backends (fake, bq,
   balance_sheet) set them. `judge.py`: `_check_grounding` → 3-tuple,

@@ -324,3 +324,106 @@ the lesson body. Chronological order.
   run. It found a critical bug my own test fakes had hidden — and caught me claiming
   'un-gameable grounding' the code didn't implement. Fakes prove your thing runs, not
   that it's right. Have a different mind check before you spend."
+
+## 2026-07-14 — I bet on the wrong latency fix; the measurement overruled me
+- Situation: the deep-dive investigation took ~150-260s and the user called it
+  unacceptable. Asked which model to swap and whether to parallelize, I answered
+  confidently: the bottleneck is the Opus generator turns, swap to Haiku, that's the
+  big rock. I did not measure first.
+- What broke / what I assumed: an instrumented run showed the real split — the JUDGE'S
+  re-verification against BigQuery was 48% of wall-clock (124.9s), the generator turns
+  only 31% (82s). My "big rock" was the second rock. The cause: the grounding gate
+  re-fetched evidence one item at a time — 39 sequential BigQuery queries, a fresh
+  client built (and thrown away) each time, re-run on the whole pile every repair
+  cycle. And the sting: that 125s blew the 240s wall-clock guard, so the investigation
+  terminated CAPPED / trusted=False. The latency bug was silently producing UNTRUSTED
+  answers.
+- Lesson: a plausible latency hypothesis from someone who knows the system is still a
+  guess. "Measure before you optimize" isn't a platitude — I'd have swapped the model,
+  shaved 60s off a 262s problem, and shipped something that still randomly failed to
+  earn trust. And the deeper one: a latency bug and a correctness bug can be the SAME
+  bug. When re-verification eats the time budget, the safety timeout converts slow runs
+  into untrusted ones. Confirmed empirically post-fix: the exact branch that returned
+  CAPPED/untrusted at 262s now returns resolved/trusted.
+- Fix / rework: batch the reverify — group by (source, ticker), one whole-history query
+  per source (the backend already pulls the full history), a session-level memo across
+  repair cycles, shared BQ/GCS clients, thread-pool the rest. Byte-identical grounding
+  semantics (the == comparison and the failed-list order are untouched; only the query
+  count changes: 39 → 2). Measured 124.9s → 3.6s.
+- Post angle: "I told the team which fix would speed up our AI agent. Then we measured —
+  and I was wrong. The real bottleneck was 48% of the runtime hiding inside the safety
+  check, and it was quietly making the system's own answers untrustworthy. A latency bug
+  and a correctness bug were the same bug. Measure before you optimize, even when you're
+  sure — especially when you're sure."
+
+## 2026-07-14 — "required" in an LLM tool schema is a hint, not a runtime contract
+- Situation: the live "Investigate" button 500'd intermittently in production. The
+  engine threw `KeyError: 'unsupported_claims'` mid-investigation, ~90s in.
+- What broke / what I assumed: the grounding judge's answer-support check forces the
+  model to call a tool whose schema marks `unsupported_claims` as `required`, then read
+  `payload["unsupported_claims"]`. When the judge concluded the answer WAS supported, it
+  returned `{supported: true}` and simply omitted the empty array. The bare subscript
+  threw; the service's blanket `except` turned it into a 500 that killed the whole ~150s
+  run. I'd trusted the schema's `required` as a runtime guarantee.
+- Lesson: `required` in a tool/function schema steers the model; it does not bind it.
+  Forced tool-use still returns partial inputs — especially "optional-feeling" fields the
+  model judges irrelevant to the current case. Parse model output defensively at the
+  boundary: `.get()` with fail-closed defaults, never bare subscripts. The model IS
+  untrusted input; validate it like any other.
+- Fix / rework: `payload.get("supported", False)` (missing verdict fails closed),
+  `payload.get("unsupported_claims") or []`. One line per field; crash gone.
+- Post angle: "Our AI's 'required' output field went missing and crashed a two-minute job
+  in production. LLM tool schemas are hints, not contracts — the model drops fields it
+  thinks don't apply. Treat model output like any untrusted input: parse defensively,
+  fail closed."
+
+## 2026-07-14 — "It's not deployed anywhere" — I shipped to the wrong project
+- Situation: shipping the new investigation UI to production. A prior scan had concluded
+  redink-ui "wasn't deployed anywhere," so I stood up a fresh Cloud Run service and wired
+  it all up. The user then said: "I can't log in — I usually use tryredink.dev."
+- What broke / what I assumed: tryredink.dev had been live the whole time, served by a
+  redink-ui Cloud Run service in a THIRD GCP project (qqq-anomaly-lab) behind a domain
+  mapping I never checked. My "not deployed" conclusion looked at two projects and
+  Firebase Hosting and stopped. My fresh service was an orphan — real prod, real Firebase
+  auth (authorized domains), real users, all one indirection away from where I looked.
+  The login failure was the tell: my service's URL wasn't an authorized Firebase domain;
+  the real one was.
+- Lesson: "where does this run in prod?" is answered by tracing the user's real entry
+  point — the domain they type — not by enumerating the services you happen to know. A
+  domain mapping, a load balancer, a different project: the deploy target hides one hop
+  away from the code. Verify infra state against the live URL before you touch it. (Same
+  day, two more of the genre: granted BigQuery `jobUser` on the service's own project when
+  the client pinned a DIFFERENT billing project — 500 until fixed; and a masked deploy
+  failure where `$?` read a trailing `grep` instead of the `gcloud` that an SSL blip had
+  silently killed.)
+- Fix / rework: deleted the orphan; deployed the feature into the real qqq-anomaly-lab
+  service the domain maps to, preserving its SA/IAM/memory and adding only the new code +
+  env vars.
+- Post angle: "I convinced myself our app 'wasn't deployed anywhere' and spun up a new
+  server. It had been live all along — one domain-mapping hop away, in a project I never
+  checked. Find where prod actually runs by following the URL your users type, not the
+  services you remember."
+
+## 2026-07-14 — Fast backend isn't enough; make the wait legible
+- Situation: after cutting the reverify path and reaching trusted results, the run still
+  took ~200s of real LLM work. The user wanted it to feel acceptable.
+- What broke / what I assumed: I first framed this as a pure latency problem. But an
+  agentic loop with real model turns has a hard floor — five-to-seven sequential LLM turns
+  cannot be 2 seconds, no matter the optimization. Chasing raw speed alone never reaches
+  "acceptable," and worse, a fast run that ends untrusted is a downgrade.
+- Lesson: "total latency" and "the experience of waiting" are different problems with
+  different fixes, and the second often matters more. A 45s blank spinner is unacceptable;
+  45s (or 200s) of watching the agent fetch filings, ground 29 facts, fail a check and
+  repair, then resolve — that's the product telling its own story. Perceived latency is
+  the higher-leverage fight once the backend is reasonable. Verified: SSE frames stream
+  incrementally through Cloud Run (first frame 0.5s, 43 events), so the wait is now a
+  live investigation, not a hang.
+- Fix / rework: the loop emits turn/tool/grounding/verdict events; a new SSE endpoint
+  runs the blocking loop in a worker thread and drains an event queue with heartbeats;
+  the UI renders a live growing step feed and reuses the existing verdict rendering +
+  trusted banner for the final frame. The decoupled generator/judge architecture is also
+  what lets a cheap model run the hot path later without losing correctness — the judge
+  enforces grounding regardless of who generated.
+- Post angle: "We fixed our AI agent's biggest bottleneck and users still called it slow —
+  because they were staring at a blank spinner. The fix wasn't more speed; it was streaming
+  the agent's work so people watch it think. Fast AND legible beats fast alone."

@@ -953,3 +953,101 @@ year-end," instead of silently reading a 6-month gap as two adjacent quarters.
   emits `fiscal_periods_skipped` when > 0. Fakes keep tidy calendars → 0.
 - Verified live (AAPL Jun 10-Q +1 → resolved Dec 10-Q, value 1.28 quarterly not the
   1.00 annual, `periods_skipped=1`). 2 regression tests. 72 tests total.
+
+## ADR-15: Reverify batching + session memo — grounding latency as a correctness fix
+
+**Date:** 2026-07-14
+**Status:** Accepted
+
+**Context:** An instrumented run put 48% of a single investigation's wall-clock (124.9s of
+262s) in the judge's INTEGRITY head: it re-fetched each evidence item from BigQuery one at
+a time — 39 sequential queries, a fresh `bigquery.Client()` built and discarded per query,
+and the whole accumulated pile re-grounded on every repair cycle. This alone blew the 240s
+`max_seconds` guard, terminating runs `CAPPED`/`trusted=False`. The latency defect was
+manufacturing untrusted results.
+
+**Decision:** Batch the deterministic reverify. De-dup probes by re-fetch identity
+(source, ticker, requested_report_date, requested_offset, feature) in first-seen order;
+group the survivors by (source, ticker) and issue ONE whole-history query per source (the
+backends already pull the ticker's full history and resolve the offset positionally);
+memoize source-side results on the `Judge` instance across `evaluate()` cycles; share a
+lazy module-level BQ/GCS client; thread-pool the remaining groups. The `==` comparison and
+the failed-list contents/order are unchanged — only the query count drops (39 → 2).
+
+**Alternatives considered:** (a) Cache the whole verdict — rejected: caches the generator's
+possibly-tampered value, defeating tamper detection; the memo stores only SOURCE truth. (b)
+Raise `max_seconds` — rejected: treats the symptom, leaves the cost. (c) Skip re-grounding
+already-seen items without a memo — the old per-call `seen` set did this within a call but
+not across repair cycles, which was the actual duplication.
+
+**Consequences:** Reverify 124.9s → 3.6s (measured, real BQ). The `CAPPED`/untrusted failure
+mode disappears — the same PANW branch that returned CAPPED/untrusted now returns
+resolved/trusted. `_judge()` is instantiated per-request in the service, so the memo is
+bounded to one investigation (no cross-request staleness). New test file
+`test_judge_batch_grounding.py` proves batched verdict == per-item verdict on a mixed-source,
+multi-offset, duplicated, tampered pile. 102 investigator tests green.
+
+## ADR-16: Model routing — cheap generator behind an enforcing judge; keep Sonnet judge; no Gemini Flash
+
+**Date:** 2026-07-14
+**Status:** Accepted — implementation pending an eval-gated A/B (trusted-rate must hold)
+
+**Context:** With reverify fixed, the remaining latency is dominated by model turns: ~7
+Opus generator turns + ~4 Sonnet answer-support calls per run. The owner wants cheaper/faster
+calls without cutting iterations, and asked whether to adopt Gemini Flash.
+
+**Decision:** Route the GENERATOR loop turns (incl. final synthesis) to Haiku 4.5; keep BOTH
+judge heads (answer-support, C/O grade) on Sonnet 5. The generator does not need to be the
+smartest model because correctness is enforced DOWNSTREAM — the integrity gate catches any
+un-fetched figure, answer-support catches mis-statements, and the repair loop is the recovery
+path. A Haiku mis-statement costs one cheap repair turn, not a wrong answer shipped. Gate the
+switch on `eval_capture_investigations.py` (n=6): Haiku's `trusted`-rate and terminal-state
+distribution must match Opus before committing.
+
+**Alternatives considered:** (a) Gemini Flash — rejected for now: the loop, registry, and
+judge are written against the Anthropic message shape (content blocks, `stop_reason`,
+`tool_result`, strict tool schemas); Flash means a second SDK, a different function-call wire
+format, an adapter layer, a second vendor/credential, separate caching semantics, and a fresh
+eval — weeks-equivalent to beat Haiku 4.5, which is already fast/cheap and is a one-line model
+string change. Reach for Flash only if Haiku proves insufficient. (b) Cheapen the judge —
+rejected: it is the correctness backstop and the one place quality is not itself backstopped;
+Haiku-generator + Sonnet-judge is also BETTER decorrelated than Opus/Sonnet, strengthening the
+judge's independence.
+
+**Consequences:** Expected generator cost ~82s → ~22s once shipped. The switch is deferred
+behind the eval gate, so the released build still runs Opus (slower but proven). `effort` is
+unsupported on Haiku — must not be sent.
+
+## ADR-17: Step-streaming via SSE — make the wait legible without altering the loop
+
+**Date:** 2026-07-14
+**Status:** Accepted
+
+**Context:** Even with a faster backend, an agentic loop has a hard latency floor (5-7
+sequential model turns). A single blocking POST returning only the final DTO ~200s later
+reads as a hang. Perceived latency is the higher-leverage fight.
+
+**Decision:** The loop takes an OPTIONAL `on_event` callback and emits turn/tool/grounding/
+verdict events (built only from the model's own tool INPUT — ADR-5 no-leak — never tool
+output or provenance). A new `POST /investigate/stream` returns `text/event-stream`: the
+blocking loop runs in a worker thread, `on_event` pushes onto a `queue.Queue`, an async
+generator drains it with periodic heartbeats and closes on a sentinel; the final frame is
+the SAME DTO the blocking endpoint returns. The worker owns semaphore release so a client
+disconnect cannot leak a permit. The UI reads the stream (`fetch` + `getReader`, not
+`EventSource`, so it can POST + set the token header), renders a live step feed, and falls
+back to the blocking POST on stream failure with NO auto-retry (a mid-run failure means Opus
+is still spending; instant retry would double-spend and 429).
+
+**Alternatives considered:** (a) Replace the blocking endpoint — rejected: the eval harness
+and a fallback path need it; streaming is additive. (b) `EventSource` — rejected: can't POST
+or set headers, and the proxy must inject the API token. (c) Poll a job-status endpoint —
+more moving parts than SSE for the same result. (d) Emit from inside `run_branch` in
+`graph.py` — deferred (file was owned by a parallel workstream); a service-side shim mirrors
+the 6-line wrapper and imports `graph._STATUS_FROM_REASON` read-only. Fold into `run_branch`
+when `graph.py` next opens.
+
+**Consequences:** `run_branch` behavior is byte-identical when `on_event is None`. Verified:
+SSE frames stream incrementally through Cloud Run (first frame 0.5s, 43 events, heartbeats
+holding the connection) — not buffered. The wait is now a watchable investigation. Rough
+edges logged: client disconnect ≠ cancellation (worker finishes; same spend as today); a
+~4s cold-import before the first `turn` event (UI caption covers it).

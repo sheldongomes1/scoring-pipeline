@@ -5,9 +5,8 @@ one record per investigation, with the inputs (key_question, predicate), the sys
 own verdict, the generator-facing evidence, and cost/latency. This is the Analyze
 step's raw material — you cannot eval an agent you haven't run.
 
-Real feature_history (BigQuery); balance_sheet + narrative are still fakes, so for
-tickers outside the WBD/AAPL fixtures those tools return absent/not-filed and the
-investigation leans on the real numeric path (which is the honest thing to eval today).
+Real feature_history (BigQuery), real balance_sheet_items (SEC EDGAR companyfacts),
+real narrative (GCS) — the full tool set reads golden sources; no fixtures.
 
 Run:  ANTHROPIC_API_KEY=... python3 scripts/eval_capture_investigations.py --n 6 --out <path>
 """
@@ -30,8 +29,8 @@ from qqq_scoring.investigator.registry import ToolBinding, ToolRegistry  # noqa:
 from qqq_scoring.investigator.tools import balance_sheet as bs  # noqa: E402
 from qqq_scoring.investigator.tools import feature_history as fh  # noqa: E402
 from qqq_scoring.investigator.tools import narrative_sections as ns  # noqa: E402
-from qqq_scoring.investigator.tools.balance_sheet_fake import SOURCE as BS_SOURCE  # noqa: E402
-from qqq_scoring.investigator.tools.balance_sheet_fake import balance_sheet_items as bs_fake  # noqa: E402
+from qqq_scoring.investigator.tools.balance_sheet_edgar import SOURCE as BS_SOURCE  # noqa: E402
+from qqq_scoring.investigator.tools.balance_sheet_edgar import balance_sheet_items as bs_edgar  # noqa: E402
 from qqq_scoring.investigator.tools.feature_history_bq import SOURCE as FH_SOURCE  # noqa: E402
 from qqq_scoring.investigator.tools.feature_history_bq import feature_history_bq  # noqa: E402
 from qqq_scoring.investigator.tools.narrative_sections_gcs import narrative_sections_gcs  # noqa: E402
@@ -72,7 +71,7 @@ def _registry() -> ToolRegistry:
     return ToolRegistry([
         ToolBinding("feature_history", feature_history_bq, fh.tool_definition(FEATURE_KEYS),
                     fh.parse_model_input, fh.to_model_content),
-        ToolBinding("balance_sheet_items", bs_fake, bs.tool_definition(bs.ITEM_KEYS),
+        ToolBinding("balance_sheet_items", bs_edgar, bs.tool_definition(bs.ITEM_KEYS),
                     bs.parse_model_input, bs.to_model_content),
         ToolBinding("narrative_sections", narrative_sections_gcs, ns.tool_definition(ns.SECTION_KEYS),
                     ns.parse_model_input, ns.to_model_content),
@@ -118,7 +117,7 @@ def main() -> None:
 
     generator = anthropic.Anthropic()
     judge = Judge(client=anthropic.Anthropic(),
-                  reverify={FH_SOURCE: feature_history_bq, BS_SOURCE: bs_fake})
+                  reverify={FH_SOURCE: feature_history_bq, BS_SOURCE: bs_edgar})
     records = []
     for i, row in enumerate(rows, 1):
         rd = row["report_date"]  # a date

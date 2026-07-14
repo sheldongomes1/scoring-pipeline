@@ -11,9 +11,10 @@ DETERMINISTIC grounding behaviour, so by ADR-7's rule (behaviour difference → 
 type; data difference → reuse) it is NOT a new type. Dollars-vs-ratios is a data
 difference; the `feature` field simply holds the line-item key.
 
-STUB: contract + Claude schema are real and tested; the FMP/BigQuery read is not
-wired. The generator-facing serializer and input parser are shared with the
-structured-tool pattern.
+This module is the CONTRACT REFERENCE (stubbed body); the REAL backend is
+`balance_sheet_edgar.py` (SEC EDGAR companyfacts) — same signature, injected via
+the registry, like feature_history / feature_history_bq. The generator-facing
+serializer and input parser are shared with the structured-tool pattern.
 """
 from __future__ import annotations
 

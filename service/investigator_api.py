@@ -7,10 +7,11 @@ steers: one POST /investigate = one `run_branch` deep-dive on the chosen branch'
 `predicate`, with the full Phase-2 loop — real tools, real grounding judge.
 
 Wiring is IDENTICAL to scripts/investigate_fanout.py (the audited reference),
-with one production upgrade: `feature_history` uses the REAL BigQuery backend
-(feature_history_bq, ADR-13/14), not the fake — and the judge's reverify map is
-routed to the same backend, so grounding re-fetches against the golden table.
-balance_sheet / narrative stay on fixtures until their real reads are wired.
+with two production upgrades: `feature_history` uses the REAL BigQuery backend
+(feature_history_bq, ADR-13/14) and `balance_sheet_items` uses the REAL SEC EDGAR
+companyfacts backend (balance_sheet_edgar) — the judge's reverify map routes each
+source to its own backend, so grounding re-fetches against the golden sources.
+narrative reads GCS; no fixtures remain in the served tool set.
 
 The service returns a GENERATOR-FACING view of the evidence only (feature /
 status / value / resolved_report_date for numbers; section / passage for prose).
@@ -48,8 +49,8 @@ from qqq_scoring.investigator.registry import ToolBinding, ToolRegistry  # noqa:
 from qqq_scoring.investigator.tools import balance_sheet as bs  # noqa: E402
 from qqq_scoring.investigator.tools import feature_history as fh  # noqa: E402
 from qqq_scoring.investigator.tools import narrative_sections as ns  # noqa: E402
-from qqq_scoring.investigator.tools.balance_sheet_fake import SOURCE as BS_SOURCE  # noqa: E402
-from qqq_scoring.investigator.tools.balance_sheet_fake import balance_sheet_items as balance_sheet_fake  # noqa: E402
+from qqq_scoring.investigator.tools.balance_sheet_edgar import SOURCE as BS_SOURCE  # noqa: E402
+from qqq_scoring.investigator.tools.balance_sheet_edgar import balance_sheet_items as balance_sheet_edgar  # noqa: E402
 from qqq_scoring.investigator.tools.contracts import GroundingMode  # noqa: E402
 from qqq_scoring.investigator.tools.feature_history_bq import SOURCE as FH_SOURCE  # noqa: E402
 from qqq_scoring.investigator.tools.feature_history_bq import feature_history_bq  # noqa: E402
@@ -194,8 +195,8 @@ def _registry() -> ToolRegistry:
         # REAL BigQuery backend for the numbers (ADR-13/14) — the production upgrade.
         ToolBinding("feature_history", feature_history_bq, fh.tool_definition(_live_feature_keys()),
                     fh.parse_model_input, fh.to_model_content),
-        # Still fixtures: swap for real reads later; zero loop/judge code changes (ADR-9).
-        ToolBinding("balance_sheet_items", balance_sheet_fake, bs.tool_definition(bs.ITEM_KEYS),
+        # REAL SEC EDGAR companyfacts backend (ADR-9 fake→real swap; zero loop/judge code changes).
+        ToolBinding("balance_sheet_items", balance_sheet_edgar, bs.tool_definition(bs.ITEM_KEYS),
                     bs.parse_model_input, bs.to_model_content),
         ToolBinding("narrative_sections", narrative_sections_gcs, ns.tool_definition(ns.SECTION_KEYS),
                     ns.parse_model_input, ns.to_model_content),
@@ -206,9 +207,9 @@ def _judge():
     from anthropic import Anthropic
 
     # Source-routed reverify map (ADR-9): each structured backend keyed by the
-    # source its evidence carries. feature_history evidence re-fetches against the
-    # REAL table — grounding replays the request (ADR-13).
-    return Judge(client=Anthropic(), reverify={FH_SOURCE: feature_history_bq, BS_SOURCE: balance_sheet_fake})
+    # source its evidence carries. feature_history re-fetches against the REAL
+    # table, balance_sheet against REAL EDGAR — grounding replays the request (ADR-13).
+    return Judge(client=Anthropic(), reverify={FH_SOURCE: feature_history_bq, BS_SOURCE: balance_sheet_edgar})
 
 
 def _evidence_view(evidence: list) -> list[dict]:

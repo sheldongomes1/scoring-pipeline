@@ -1051,3 +1051,64 @@ SSE frames stream incrementally through Cloud Run (first frame 0.5s, 43 events, 
 holding the connection) — not buffered. The wait is now a watchable investigation. Rough
 edges logged: client disconnect ≠ cancellation (worker finishes; same spend as today); a
 ~4s cold-import before the first `turn` event (UI caption covers it).
+
+## ADR-18: Structured final turn (`submit_findings`) — every field verified, verifier chosen by field type
+
+**Date:** 2026-07-15
+**Status:** Accepted — implementation pending
+
+**Context:** The served investigation output is illegible. The live ALNY run rendered: a
+self-contradictory verdict (`ABANDONED / not grounded` banner over a bold "Verdict: NOT
+SUPPORTED"), a final text that is a compliance affidavit addressed to the JUDGE (opens
+"Understood. I will state only figures the tools returned…" — a repair-prompt artifact),
+the judge's raw reasoning list (4 of 5 items say "supported"; the fatal one is
+indistinguishable), a 24-item evidence dump inlining the entire MD&A (~5k words), raw
+floats (`-0.5343633538029784`), a mojibake bug (UTF-8 em dash decoded as cp1252), and a
+final text truncated mid-bullet. Root cause: the DTO is an engineering trace and the UI
+renders the trace. One free-text document is serving three audiences (judge, user, UI)
+with opposite needs. Deterministic formatting fixes most defects, but no deterministic
+transform can extract a reliable verdict from free markdown authored for the wrong
+audience — the answer must be BORN structured, inside the gate.
+
+**Decision:** The loop's final turn becomes a forced tool call, `submit_findings`, replacing
+free-text `end_turn` as the termination proposal the judge adjudicates. Schema and
+verification map — nothing is exempt; the split is WHICH verifier, not whether:
+- `verdict_sentence` (1 sentence) → answer-support head. The central claim; skipping it
+  re-imports the post-hoc-summarizer trap (unverified text under a trusted badge).
+- `rationale` (2–4 sentences) → answer-support. The SINGLE home for interpretation.
+- `key_evidence[]` (3–6 probe references `(source, ticker, date, feature, value)`, no
+  prose) → INTEGRITY head, batched `==` re-fetch (ADR-15 path). References make
+  ungroundable evidence unrepresentable.
+- `caveats[]` (claims of absence / limitations) → answer-support against the full pile
+  including failed probes (misses are receipts too, e.g. `feature_missing`).
+Contract changes riding along: judge heads (answer-support, C/O) read the serialized
+fields instead of `final_text`; "required is a hint" (2026-07-14) applies to our own
+schema — missing `caveats` defaults to `[]`, missing `key_evidence` FAILS CLOSED to
+untrusted (an answer citing nothing is unverifiable by construction); the generator's
+provenance-heavy reasoning is demoted to a collapsed audit attachment in the DTO, not
+deleted. Post-gate rule made explicit: after the grounding gate, only deterministic code
+may touch content — never a model. Number formatting, delta computation, evidence
+collapsing/excerpting, state-label mapping, step-feed wording, and the mojibake fix are
+UI-layer deterministic transforms.
+
+**Alternatives considered:** (a) UI-only formatting of the existing DTO — rejected as
+sufficient: handles every deterministic defect but cannot un-write judge-addressed prose
+or reliably extract a verdict from free markdown; retained for everything post-gate.
+(c) Post-hoc summarizer pass — rejected: any model rewrite AFTER the gate produces
+unverified text wearing a verified badge; the flaw is pipeline position, not model
+quality (an Opus summarizer breaks the guarantee identically). Per-item `why_it_matters`
+annotation on evidence — DEFERRED, not rejected: it would multiply the judge's
+interpretive surface exactly where answer-support is suspected miscalibrated (the ALNY
+run failed grounding on "interpretive leap… though a reasonable inference"); deterministic
+deltas (`+35.7% q/q`) supply most of the value free. Reopen once the eval quantifies and
+fixes inference-vs-fabrication calibration.
+
+**Consequences:** The verdict card renders verified fields only; the affidavit becomes
+progressive-disclosure detail. Answer-support receives pre-parsed claims (the verdict IS
+the claim, the evidence IS the citation list) instead of extracting them from markdown —
+the judge's job gets crisper, not looser. Termination semantics change (tool-call, not
+`end_turn`), touching `loop.py`, `judge.py`, the service DTO, and the eval harness's
+capture format. Known open risk logged separately: answer-support's over-strictness on
+reasoned inference (false ABANDONED on honest refutations, e.g. ALNY 2025-06-30) —
+measure prevalence in the 6-ticker eval BEFORE tuning the rubric; it also contaminates
+the ADR-16 Haiku A/B baseline if unfixed.

@@ -71,7 +71,7 @@ def _registry() -> ToolRegistry:
     return ToolRegistry([
         ToolBinding("feature_history", feature_history_bq, fh.tool_definition(FEATURE_KEYS),
                     fh.parse_model_input, fh.to_model_content),
-        ToolBinding("balance_sheet_items", bs_edgar, bs.tool_definition(bs.ITEM_KEYS),
+        ToolBinding("balance_sheet_items", bs_backend, bs.tool_definition(bs.ITEM_KEYS),
                     bs.parse_model_input, bs.to_model_content),
         ToolBinding("narrative_sections", narrative_sections_gcs, ns.tool_definition(ns.SECTION_KEYS),
                     ns.parse_model_input, ns.to_model_content),
@@ -117,7 +117,7 @@ def main() -> None:
 
     generator = anthropic.Anthropic()
     judge = Judge(client=anthropic.Anthropic(),
-                  reverify={FH_SOURCE: feature_history_bq, BS_SOURCE: bs_edgar})
+                  reverify={FH_SOURCE: feature_history_bq, BS_SOURCE: bs_backend})
     records = []
     for i, row in enumerate(rows, 1):
         rd = row["report_date"]  # a date
@@ -140,6 +140,11 @@ def main() -> None:
                 "grounded": r.verdict.grounded if r.verdict else None,
                 "confirm": (r.verdict.confirm.value if r.verdict and r.verdict.confirm else None),
                 "open_questions": r.verdict.open_questions if r.verdict else None,
+                # Judge-calibration fields (ADR-18 open risk): WHY grounding failed, so the
+                # eval can separate fabrication catches from interpretive-leap rejections.
+                "judge_reasoning": r.verdict.reasoning if r.verdict else None,
+                "ungrounded_items": list(r.verdict.ungrounded_items) if r.verdict else None,
+                "deterministic_failure": r.verdict.deterministic_failure if r.verdict else None,
                 "final_text": r.final_text,
                 "evidence": _evidence_view(r.evidence),
                 "tool_calls": r.tool_calls, "iterations": r.iterations,

@@ -475,3 +475,29 @@ the lesson body. Chronological order.
 - Post angle: "Our AI agent had a 4-minute timeout and still ran for 21 hours. The
   timeout was checked between steps — and one step never came back. Cooperative timeouts
   are suggestions; only socket-level deadlines are promises."
+
+## 2026-07-16 — Structured outputs turned the token limit into a protocol hazard
+- Situation: first live run of the ADR-18 loop (18-run eval). PANW passed 3/3 through
+  the full new path; INSM r1 died with a 400 — `tool_use` ids without `tool_result`
+  blocks — poisoning the transcript for every subsequent request in that run.
+- What broke / what I assumed: `DEFAULT_MAX_TOKENS=2048` predates ADR-18, when the final
+  answer was prose — truncated prose degrades gracefully. ADR-18 made the final turn a
+  large JSON tool call (verdict + rationale + 3–6 citation objects + caveats), so the
+  same limit now cuts the model off MID-tool_use: `stop_reason="max_tokens"` with a
+  dangling tool_use block. The stall branch matched on `stop_reason != "tool_use"`,
+  appended a bare text nudge, and left the block unanswered — an API-contract violation.
+  PANW's terse answers fit in 2048; INSM's hedge-heavy long answer didn't, so the bug
+  selected for exactly the borderline cases the eval was measuring.
+- Lesson: when you move model output from prose to structure, truncation changes
+  category — from a quality problem to a protocol violation. Any branch keyed on
+  `stop_reason` must still honor invariants carried by the CONTENT (every tool_use id
+  needs a tool_result), because stop_reason and content are not exclusive. Handle the
+  general case (any non-tool_use stop carrying tool_use blocks), not just max_tokens.
+- Fix / rework: dangling tool_use blocks now get an `is_error` tool_result telling the
+  model it was cut off and to re-issue; DEFAULT_MAX_TOKENS 2048 → 4096. Regression test
+  with a scripted truncated turn. Caught live within one eval run because the harness
+  records per-run errors and PANW/INSM diverged immediately.
+- Post angle: "We upgraded our AI agent from prose answers to structured JSON — and our
+  token limit instantly became a protocol bug. A truncated sentence is a shrug; a
+  truncated JSON tool call is a corrupted conversation. Structure changes what failure
+  means."

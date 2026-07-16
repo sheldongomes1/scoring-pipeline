@@ -81,7 +81,7 @@ def test_map_grounds_mixed_structured_sources():
     features = fh_fake("WBD", date(2025, 6, 30), 0, ["ocf_to_net_income"])
     line_items = bs_fake("WBD", date(2025, 6, 30), 0, ["accounts_receivable"])
     judge = Judge(client=None, reverify={FH_SOURCE: fh_fake, BS_SOURCE: bs_fake})
-    grounded, failed, _ = judge._check_grounding(features + line_items)
+    grounded, failed, _, _ = judge._check_grounding(features + line_items)
     assert grounded is True
     assert failed == []
 
@@ -91,7 +91,7 @@ def test_missing_backend_for_a_source_fails_grounding():
     re-verified — the routing gap surfaces as ungrounded, not a silent pass."""
     line_items = bs_fake("WBD", date(2025, 6, 30), 0, ["accounts_receivable"])
     judge = Judge(client=None, reverify={FH_SOURCE: fh_fake})  # feature backend only
-    grounded, failed, _ = judge._check_grounding(line_items)
+    grounded, failed, _, _ = judge._check_grounding(line_items)
     assert grounded is False
     assert "no reverify backend" in failed[0]
 
@@ -102,7 +102,7 @@ def test_routing_to_the_wrong_backend_is_caught():
     mis-routed map fails grounding rather than falsely passing."""
     line_items = bs_fake("WBD", date(2025, 6, 30), 0, ["accounts_receivable"])
     judge = Judge(client=None, reverify={BS_SOURCE: fh_fake})  # bs source -> WRONG backend
-    grounded, failed, _ = judge._check_grounding(line_items)
+    grounded, failed, _, _ = judge._check_grounding(line_items)
     assert grounded is False
 
 
@@ -110,7 +110,7 @@ def test_single_callable_shorthand_still_works():
     """Backwards compatibility: one structured backend can still be a lone callable."""
     line_items = bs_fake("WBD", date(2025, 6, 30), 0, ["accounts_receivable"])
     judge = Judge(client=None, reverify=bs_fake)  # single callable, no map
-    grounded, failed, _ = judge._check_grounding(line_items)
+    grounded, failed, _, _ = judge._check_grounding(line_items)
     assert grounded is True
 
 

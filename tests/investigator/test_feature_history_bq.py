@@ -111,7 +111,7 @@ def test_authentic_period_not_filed_re_grounds():
     reverify = lambda tk, rd, off, fs: feature_history_bq(tk, rd, off, fs, client=client)
     evidence = feature_history_bq("AAPL", date(2025, 12, 27), 3, ["ocf_to_net_income"], client=client)
     assert evidence[0].status is FeatureStatus.PERIOD_NOT_FILED     # offset past the latest filing
-    grounded, failed, det = Judge(client=None, reverify=reverify)._check_grounding(evidence)
+    grounded, failed, det, _ = Judge(client=None, reverify=reverify)._check_grounding(evidence)
     assert grounded is True     # authentic not-filed re-grounds cleanly (was False before the fix)
     assert det is False
     assert failed == []

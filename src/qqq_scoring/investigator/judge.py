@@ -62,6 +62,11 @@ class JudgeVerdict:
     #                                         generator CANNOT fix this (source drift /
     #                                         config), so the loop must not waste repair
     #                                         cycles on it — route straight to ABANDONED.
+    advisories: tuple[str, ...] = ()        # ADR-19: NON-gating judge notes (framing /
+    #                                         hedged-inference / completeness comments on
+    #                                         SUPPORTED facts). Informational only — they
+    #                                         never affect `grounded`; the UI renders them
+    #                                         as "judge notes", not failure reasons.
 
 
 def _judgment_tool() -> dict:
@@ -107,14 +112,21 @@ def _judgment_tool() -> dict:
 
 
 def _grounding_tool() -> dict:
-    """Strict schema for the SEMANTIC grounding head (ADR-7). The model reports
-    whether the passages support the answer's narrative claims — it does not opine
-    on structured figures (those are checked by `==`, never by a model)."""
+    """Strict schema for the ANSWER-SUPPORT head (ADR-13, two-tier per ADR-19).
+
+    The judge's output is split into two tiers: `violations` GATE the run (a
+    genuine grounding breach), `advisories` never do (style/framing commentary on
+    supported facts). The single-bucket rubric let style rejections gate whole
+    runs (~8/11 measured rejections were style-class); the split releases only
+    items the judge affirmatively marks style-only — ambiguity fails closed into
+    `violations`, so the false-trusted rate cannot grow through the middle."""
     return {
         "name": "submit_grounding",
         "description": (
-            "Report whether the investigator's answer faithfully characterizes the "
-            "provided filing passages. List any narrative claim the passages do not support."
+            "Report whether the investigator's answer is supported by the verified "
+            "evidence. Classify every concern into exactly one of two tiers: "
+            "'violations' (grounding breaches that make the answer untrustworthy) or "
+            "'advisories' (style/framing notes on facts that ARE supported)."
         ),
         "strict": True,
         "input_schema": {
@@ -122,16 +134,36 @@ def _grounding_tool() -> dict:
             "properties": {
                 "supported": {
                     "type": "boolean",
-                    "description": "True only if every claim about the narrative follows from the passages.",
+                    "description": (
+                        "True only if the answer contains NO violations — every figure and "
+                        "characterization is supported by (or correctly derived from) the evidence."
+                    ),
                 },
-                "unsupported_claims": {
+                "violations": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Each answer-claim about the narrative that the passages do not support (empty if all supported).",
+                    "description": (
+                        "GATING breaches ONLY, of these kinds: a figure that is absent from the "
+                        "evidence and not derivable from it by correct arithmetic; a quote that "
+                        "appears in no passage; a claim that a passage contradicts; a misrepresentation "
+                        "of magnitude or period basis (e.g. presenting a quarterly figure as a "
+                        "nine-month one, or vice versa). If you cannot confidently classify a concern "
+                        "as style-only, it belongs HERE (fail closed). Empty if none."
+                    ),
+                },
+                "advisories": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "NON-gating notes ONLY: framing or emphasis choices about facts that ARE "
+                        "supported; hedged inference that is explicitly labeled as inference "
+                        "(e.g. 'consistent with, though not confirmed'); suggestions about "
+                        "completeness. These never make the answer untrustworthy. Empty if none."
+                    ),
                 },
                 "reasoning": {"type": "string", "description": "One or two sentences justifying the call."},
             },
-            "required": ["supported", "unsupported_claims", "reasoning"],
+            "required": ["supported", "violations", "advisories", "reasoning"],
             "additionalProperties": False,
         },
     }
@@ -252,22 +284,71 @@ class Judge:
 
     # --- G: two-headed, dispatched by the evidence's declared mode (ADR-7) ----
 
-    def _check_grounding(self, evidence: list, answer: str = "") -> tuple[bool, list[str], bool]:
-        """Grounding gate. Returns (grounded, failed_items, deterministic_failure).
+    def _check_key_evidence(self, key_evidence: list, evidence: list) -> list[str]:
+        """ADR-18: verify the generator's `key_evidence` citations against the
+        ACTUALLY-FETCHED evidence pile. Each reference must match a fetched probe by
+        identity (ticker, requested_report_date, requested_offset, feature) and by
+        value `==`. A citation of a probe the loop never made — even one that would
+        happen to be true at source — fails: an answer may only cite evidence it
+        fetched. The matched items' source truth is separately guaranteed by the
+        INTEGRITY head, which re-fetches the whole deterministic pile (ADR-15 batch),
+        so reference == fetched == source chains through. A failure here is the
+        generator mis-citing → repairable, like any answer mis-statement (ADR-13)."""
+        index: dict = {}
+        for e in evidence:
+            if e.grounding_mode is not GroundingMode.DETERMINISTIC:
+                continue
+            p = e.provenance
+            index[(p.ticker, p.requested_report_date, p.requested_offset, e.feature)] = e
+        failed: list[str] = []
+        for ref in key_evidence:
+            if not isinstance(ref, dict):
+                failed.append(f"malformed key_evidence reference: {ref!r}")
+                continue
+            feature = ref.get("feature")
+            try:
+                rd = date.fromisoformat(str(ref.get("report_date")))
+                offset = int(ref.get("period_offset"))
+            except (TypeError, ValueError):
+                failed.append(f"key_evidence reference has an invalid date/offset: {feature!r}")
+                continue
+            match = index.get((ref.get("ticker"), rd, offset, feature))
+            if match is None:
+                failed.append(
+                    f"cited evidence was never fetched: {feature}@{rd.isoformat()} (offset {offset:+d})"
+                )
+                continue
+            if ref.get("value") != match.value:
+                failed.append(
+                    f"cited value {ref.get('value')!r} for {feature}@{rd.isoformat()} "
+                    f"does not match the fetched value {match.value!r}"
+                )
+        return failed
 
-        Two heads (ADR-13 hardened):
+    def _check_grounding(
+        self, evidence: list, answer: str = "", key_evidence: list | None = None
+    ) -> tuple[bool, list[str], bool, list[str]]:
+        """Grounding gate. Returns (grounded, failed_items, deterministic_failure,
+        advisories).
+
+        Heads (ADR-13 hardened, ADR-18/19 extended):
           1. INTEGRITY (deterministic, per structured item): re-fetch by REPLAYING
              the original request (requested_report_date + requested_offset), route
              by provenance.source, compare (status, value). Confirms the evidence is
              authentic. A failure here is a source-drift/config event the generator
              CANNOT fix → `deterministic_failure=True` (unrepairable).
+          1b. KEY-EVIDENCE CITATIONS (deterministic, ADR-18): each submit_findings
+             `key_evidence` reference must match an actually-fetched probe by identity
+             and value; the integrity head's re-fetch of that same pile then anchors
+             the fetched value to source. A mis-citation is repairable.
           2. ANSWER-SUPPORT (model, ALWAYS runs when there's an answer + evidence):
              does every factual claim in the ANSWER — every figure and every
-             characterization — follow from the (now-authentic) evidence? This is
-             the guard against the generator writing a number it never fetched, and
-             it runs for numbers-only investigations too (ADR-13 fix: previously it
-             only ran when narrative evidence happened to exist). A failure here is
-             the generator's mis-statement → repairable."""
+             characterization — follow from the (now-authentic) evidence? Two-tier
+             output (ADR-19): `violations` gate; `advisories` are carried through
+             untouched and never gate. Skipped when integrity already failed: the
+             evidence is untrustworthy, so checking the answer against it is
+             pointless, and this preserves ADR-1's "don't consult the model on
+             ungrounded output" (no wasted model call)."""
         deterministic = [e for e in evidence if e.grounding_mode is GroundingMode.DETERMINISTIC]
 
         # Head 1 — INTEGRITY: replay the exact request and compare, byte-identical to
@@ -275,35 +356,49 @@ class Judge:
         # instead of one per feature × offset — and MEMOIZED across evaluate() cycles
         # (latency #2). See `_reverify_deterministic`.
         failed, deterministic_failure = self._reverify_deterministic(deterministic)
+        advisories: list[str] = []
+
+        # Head 1b — key_evidence citations (ADR-18), only when integrity holds (a
+        # drifted source makes the fetched pile itself untrustworthy to cite against).
+        if not deterministic_failure and key_evidence:
+            failed.extend(self._check_key_evidence(key_evidence, evidence))
 
         # Head 2 — ANSWER-SUPPORT: does the answer's every claim follow from the
         # evidence? Always runs (numbers AND prose) — the real anti-hallucination
-        # gate. Skipped when integrity already failed: the evidence is untrustworthy,
-        # so checking the answer against it is pointless, and this preserves ADR-1's
-        # "don't consult the model on ungrounded output" (no wasted model call).
+        # gate. Skipped when integrity already failed (see docstring).
         if not deterministic_failure and answer.strip() and evidence:
-            supported, unsupported = self._check_answer_support(answer, evidence)
+            supported, violations, advisories = self._check_answer_support(answer, evidence)
             if not supported:
-                failed.extend(unsupported or ["answer claims not supported by evidence"])
+                failed.extend(violations or ["answer claims not supported by evidence"])
 
-        return (len(failed) == 0, failed, deterministic_failure)
+        return (len(failed) == 0, failed, deterministic_failure, advisories)
 
-    def _check_answer_support(self, answer: str, evidence: list) -> tuple[bool, list[str]]:
-        """The ANSWER-SUPPORT head of G (ADR-13): does every factual claim in the
-        answer — numeric or narrative — follow from the verified evidence? A model
-        call, because it must understand derived figures (0.55→0.95 is +0.40) and
-        prose paraphrase, neither of which survives an `==`. Catches the generator
-        citing a number it never fetched or mischaracterizing a passage."""
+    def _check_answer_support(self, answer: str, evidence: list) -> tuple[bool, list[str], list[str]]:
+        """The ANSWER-SUPPORT head of G (ADR-13, two-tier per ADR-19): does every
+        factual claim in the answer — numeric or narrative — follow from the verified
+        evidence? A model call, because it must understand derived figures
+        (0.55→0.95 is +0.40) and prose paraphrase, neither of which survives an `==`.
+
+        Returns (ok, violations, advisories). Gate condition (ADR-19): ok is True
+        only when the judge said `supported` AND returned an empty `violations`
+        list — a disagreement between the bool and the list is NOT grounded (fail
+        closed). Advisories are style/framing notes on supported facts and never
+        affect the gate."""
         view = json.dumps([self._view(e) for e in evidence])
         prompt = (
             "An investigator was given ONLY this verified evidence (numbers re-fetched "
             f"from source, passages verbatim):\n{view}\n\n"
             f"It then wrote this answer:\n{answer}\n\n"
-            "Does EVERY factual claim in the answer follow from this evidence — every "
-            "figure (allowing correct arithmetic on the given numbers) and every "
-            "characterization of the narrative? Flag any claim not supported: a number "
-            "that is not in the evidence and is not derivable from it, or a "
-            "characterization the passages do not support. Call submit_grounding."
+            "Assess every factual claim in the answer against this evidence.\n"
+            "Report as a VIOLATION (gating) only these kinds of breach: a figure that "
+            "is absent from the evidence and not derivable from it by correct "
+            "arithmetic; a quote that appears in no passage; a claim that a passage "
+            "contradicts; a misrepresentation of magnitude or period basis.\n"
+            "Report as an ADVISORY (non-gating) style-only notes: framing or emphasis "
+            "of facts that ARE supported; hedged inference explicitly labeled as "
+            "inference; completeness suggestions.\n"
+            "If you cannot confidently classify a concern as style-only, put it in "
+            "violations (fail closed). Call submit_grounding."
         )
         resp = self._client.messages.create(
             model=self._model,
@@ -314,16 +409,22 @@ class Judge:
         )
         payload = next((b.input for b in resp.content if getattr(b, "type", None) == "tool_use"), None)
         if payload is None:
-            return (False, ["semantic grounding check produced no verdict"])
+            return (False, ["semantic grounding check produced no verdict"], [])
         # Parse defensively: `required` in the tool schema is a hint to the model,
-        # not a runtime guarantee — a "supported: true" verdict routinely omits the
-        # empty `unsupported_claims` array. A missing `supported` key fails closed
-        # (treat as not-supported), matching the no-payload branch above; a missing
-        # claims list is just an empty list. (Was a bare `payload["..."]` → KeyError
-        # → the service's blanket except → 500 that killed the whole investigation.)
-        supported = bool(payload.get("supported", False))
-        unsupported = list(payload.get("unsupported_claims") or [])
-        return (supported, unsupported)
+        # not a runtime guarantee (2026-07-14 lesson) — fields go missing. ADR-19
+        # fail-closed rules: a missing `supported` OR a missing `violations` key is
+        # NOT grounded (we cannot tell a clean pass from a dropped field); a missing
+        # `advisories` is just an empty list (it never gates).
+        advisories = list(payload.get("advisories") or [])
+        if "supported" not in payload or "violations" not in payload:
+            return (False, ["answer-support verdict incomplete (missing supported/violations)"], advisories)
+        supported = bool(payload["supported"])
+        violations = list(payload["violations"] or [])
+        # Gate condition: supported AND no violations. A bool/list disagreement
+        # (supported=true with a non-empty violations list, or supported=false with
+        # an empty one) is a judge inconsistency → not grounded (fail closed).
+        ok = supported and not violations
+        return (ok, violations, advisories)
 
     # --- C, O: the judge model ----------------------------------------------
 
@@ -342,7 +443,9 @@ class Judge:
             "quarter": e.provenance.resolved_report_date.isoformat(),
         }
 
-    def _grade_semantics(self, predicate: str, answer: str, evidence: list) -> JudgeVerdict:
+    def _grade_semantics(
+        self, predicate: str, answer: str, evidence: list, advisories: tuple = ()
+    ) -> JudgeVerdict:
         # The model sees the GENERATOR-facing view of the (now-verified) evidence —
         # it does not need provenance to judge C/O; provenance was G's concern.
         evidence_view = json.dumps([self._view(e) for e in evidence])
@@ -370,19 +473,33 @@ class Judge:
             # stamping a non-functioning judge until CAP_REACHED. Terminate clean as
             # INDETERMINATE with no open questions → the loop stops INCONCLUSIVE, an
             # honest "the judge couldn't decide," rather than spinning.
-            return JudgeVerdict(True, Confirm.INDETERMINATE, False, "judge produced no verdict")
+            return JudgeVerdict(True, Confirm.INDETERMINATE, False, "judge produced no verdict",
+                                advisories=tuple(advisories))
         return JudgeVerdict(
             grounded=True,
             confirm=Confirm(payload["confirm"]),
             open_questions=bool(payload["open_questions"]),
             reasoning=payload["reasoning"],
+            advisories=tuple(advisories),
         )
 
     # --- public: G first, then C/O ------------------------------------------
 
-    def evaluate(self, predicate: str, answer: str, evidence: list[FeatureResult]) -> JudgeVerdict:
-        """Grade a proposed conclusion. Grounding gates everything (ADR-1)."""
-        grounded, failed, deterministic_failure = self._check_grounding(evidence, answer)
+    def evaluate(
+        self,
+        predicate: str,
+        answer: str,
+        evidence: list[FeatureResult],
+        key_evidence: list | None = None,
+    ) -> JudgeVerdict:
+        """Grade a proposed conclusion. Grounding gates everything (ADR-1).
+
+        `key_evidence` (ADR-18): the structured probe references the generator's
+        submit_findings cited — each must match an actually-fetched probe (identity
+        + value), whose source truth the integrity head separately re-fetches."""
+        grounded, failed, deterministic_failure, advisories = self._check_grounding(
+            evidence, answer, key_evidence
+        )
         if not grounded:
             # Short-circuit: C and O would be produced by the same untrustworthy
             # reasoning, so they are not consulted. `deterministic_failure` tells the
@@ -395,5 +512,6 @@ class Judge:
                 reasoning=f"grounding failed ({kind}): {failed}",
                 ungrounded_items=tuple(failed),
                 deterministic_failure=deterministic_failure,
+                advisories=tuple(advisories),
             )
-        return self._grade_semantics(predicate, answer, evidence)
+        return self._grade_semantics(predicate, answer, evidence, advisories=tuple(advisories))

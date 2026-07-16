@@ -261,6 +261,9 @@ def build_response_dto(branch: Branch, flag: Flag, elapsed_seconds: float) -> di
             "confirm": v.confirm.value if v.confirm is not None else None,
             "open_questions": v.open_questions,
             "reasoning": v.reasoning,
+            # ADR-19: non-gating judge notes — rendered as "judge notes", never as
+            # failure reasons.
+            "advisories": list(v.advisories),
         }
     return {
         "ticker": flag.ticker,
@@ -268,10 +271,18 @@ def build_response_dto(branch: Branch, flag: Flag, elapsed_seconds: float) -> di
         "branch_id": branch.id,
         "hypothesis": branch.hypothesis,
         "status": branch.status.value,          # resolved | inconclusive | abandoned | capped
-        # `trusted` (Fable health check): did final_text pass the grounding gate on a
+        # `trusted` (Fable health check): did the answer pass the grounding gate on a
         # clean terminal? False for capped/abandoned — the UI must NOT present an
         # untrusted answer as a verified conclusion (it may be a rejected/partial one).
         "trusted": bool(result and result.trusted),
+        # ADR-18 structured findings (additive): the VERIFIED fields the UI renders
+        # as the verdict card. `final_text` remains below as the audit attachment
+        # (the generator's last prose turn) — demoted, not deleted.
+        "verdict_sentence": result.verdict_sentence if result else "",
+        "rationale": result.rationale if result else "",
+        "key_evidence": list(result.key_evidence) if result else [],
+        "caveats": list(result.caveats) if result else [],
+        "advisories": list(result.advisories) if result else [],
         "final_text": result.final_text if result else "",
         "verdict": verdict,
         "tool_calls": result.tool_calls if result else 0,

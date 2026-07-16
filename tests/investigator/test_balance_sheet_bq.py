@@ -66,7 +66,7 @@ def test_adr13_authentic_not_filed_re_grounds():
     reverify = lambda tk, rd, off, its: balance_sheet_items(tk, rd, off, its, client=client)
     ev = balance_sheet_items("WBD", date(2025, 3, 31), 5, ["accounts_receivable"], client=client)
     assert ev[0].status is FeatureStatus.PERIOD_NOT_FILED
-    grounded, failed, det = Judge(client=None, reverify=reverify)._check_grounding(ev)
+    grounded, failed, det, _ = Judge(client=None, reverify=reverify)._check_grounding(ev)
     assert grounded is True and det is False and failed == []
 
 

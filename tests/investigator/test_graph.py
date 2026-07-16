@@ -80,8 +80,20 @@ class FakeJudge:
     def __init__(self, verdict):
         self._v = verdict
 
-    def evaluate(self, predicate, answer, evidence):
+    def evaluate(self, predicate, answer, evidence, key_evidence=None):
         return self._v
+
+
+def _findings_turn(sentence="Recovered — timing swing."):
+    """A scripted submit_findings proposal (ADR-18) with one citable probe."""
+    return _Response("tool_use", [_ToolUseBlock("submit_findings", {
+        "verdict_sentence": sentence,
+        "rationale": "the series recovered",
+        "key_evidence": [{"source": "feature_history", "ticker": "WBD",
+                          "report_date": "2025-06-30", "period_offset": 1,
+                          "feature": "ocf_to_net_income", "value": 0.52}],
+        "caveats": [],
+    })])
 
 
 FOUR_HYPOTHESES = {
@@ -140,14 +152,14 @@ def test_run_branch_steers_the_loop_and_stamps_status():
     client = ScriptedClient([_Response("tool_use", [_ToolUseBlock("propose_hypotheses", FOUR_HYPOTHESES)])])
     graph = propose_branches(client, _flag(), n=4)
 
-    generator = ScriptedClient([_Response("end_turn", [_TextBlock("Recovered — timing swing.")])])
+    generator = ScriptedClient([_findings_turn()])
     judge = FakeJudge(JudgeVerdict(True, Confirm.CONFIRMED, False, "confirmed"))
 
     branch = run_branch(graph.get("h1"), graph.flag, generator, _registry(), judge)
     assert branch.status is BranchStatus.RESOLVED
     assert branch.result.reason is TerminalReason.RESOLVED
     # the loop was steered by the branch's predicate, not the generic flag
-    assert generator.calls[0]["messages"][0]["content"].endswith(branch.predicate)
+    assert branch.predicate in generator.calls[0]["messages"][0]["content"]
 
 
 # --- Phase 4: recursive expansion control logic (ADR-10, no LLM) ------------
@@ -258,7 +270,7 @@ def test_get_finds_nested_branch_and_raises_on_missing():
 
 def test_capped_branch_is_distinct_and_carries_verdict():
     from qqq_scoring.investigator.judge import Confirm
-    client = ScriptedClient([_Response("end_turn", [_TextBlock("prelim")])])   # auto-repeats last turn
+    client = ScriptedClient([_findings_turn("prelim")])   # auto-repeats last turn
     open_forever = JudgeVerdict(True, Confirm.INDETERMINATE, True, "still open")
     branch = Branch("h1", "hyp", "why", "pred?", depth=0)
     run_branch(branch, _flag(), client, _registry(), FakeJudge(open_forever))   # never resolves → ceiling

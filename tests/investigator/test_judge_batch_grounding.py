@@ -95,10 +95,10 @@ def test_batched_verdict_equals_per_item_verdict():
     ev = _mixed_evidence()
 
     per = Judge(client=None, reverify=_reverify_map(_counting_per_item))
-    g1, f1, d1 = per._check_grounding(ev)
+    g1, f1, d1, _ = per._check_grounding(ev)
 
     bat = Judge(client=None, reverify=_reverify_map(_counting_batch))
-    g2, f2, d2 = bat._check_grounding(ev)
+    g2, f2, d2, _ = bat._check_grounding(ev)
 
     assert (g1, f1, d1) == (g2, f2, d2), f"per-item {(g1, f1, d1)} != batched {(g2, f2, d2)}"
     assert g1 is False and d1 is True                       # the tampered item fails

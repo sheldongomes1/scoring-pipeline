@@ -145,6 +145,12 @@ def main() -> None:
                 "judge_reasoning": r.verdict.reasoning if r.verdict else None,
                 "ungrounded_items": list(r.verdict.ungrounded_items) if r.verdict else None,
                 "deterministic_failure": r.verdict.deterministic_failure if r.verdict else None,
+                # ADR-18/19 structured findings + judge notes (additive capture fields).
+                "verdict_sentence": r.verdict_sentence,
+                "rationale": r.rationale,
+                "key_evidence": list(r.key_evidence),
+                "caveats": list(r.caveats),
+                "advisories": list(r.advisories),
                 "final_text": r.final_text,
                 "evidence": _evidence_view(r.evidence),
                 "tool_calls": r.tool_calls, "iterations": r.iterations,

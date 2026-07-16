@@ -157,7 +157,7 @@ def test_provenance_carries_the_request_and_replay_re_grounds():
     not_filed = _bs(date(2025, 12, 27), 3)  # offset past the filed history
     assert not_filed[0].status is FeatureStatus.PERIOD_NOT_FILED
     for evidence in ([found], not_filed):
-        grounded, failed, det = Judge(client=None, reverify=reverify)._check_grounding(evidence)
+        grounded, failed, det, _ = Judge(client=None, reverify=reverify)._check_grounding(evidence)
         assert grounded is True
         assert det is False
         assert failed == []

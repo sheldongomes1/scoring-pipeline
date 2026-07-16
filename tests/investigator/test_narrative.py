@@ -64,7 +64,8 @@ class ScriptedJudge:
         self.messages = _Messages(self)
         self._turn = _Response([_ToolUseBlock(
             "submit_grounding",
-            {"supported": supported, "unsupported_claims": list(unsupported), "reasoning": "test"},
+            # ADR-19 two-tier schema: gating breaches go in `violations`.
+            {"supported": supported, "violations": list(unsupported), "advisories": [], "reasoning": "test"},
         )])
 
 
@@ -178,7 +179,7 @@ def test_to_model_content_shows_passage_hides_receipts():
 def test_semantic_grounding_passes_when_model_says_supported():
     narrative = narrative_sections_fake("AAPL", date(2025, 6, 30), "10-Q", ["mdna"])
     judge = Judge(client=ScriptedJudge(supported=True), reverify=feature_history_fake)
-    grounded, failed, _ = judge._check_grounding(narrative, "AAPL called it a temporary timing effect.")
+    grounded, failed, _, _ = judge._check_grounding(narrative, "AAPL called it a temporary timing effect.")
     assert grounded is True
     assert failed == []
 
@@ -189,7 +190,7 @@ def test_semantic_grounding_fails_when_model_flags_a_claim():
         client=ScriptedJudge(supported=False, unsupported=["claims management admitted structural weakness"]),
         reverify=feature_history_fake,
     )
-    grounded, failed, _ = judge._check_grounding(narrative, "AAPL management admitted structural weakness.")
+    grounded, failed, _, _ = judge._check_grounding(narrative, "AAPL management admitted structural weakness.")
     assert grounded is False
     assert failed == ["claims management admitted structural weakness"]
 
@@ -200,7 +201,7 @@ def test_mixed_evidence_uses_both_grounding_heads():
     structured = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
     narrative = narrative_sections_fake("AAPL", date(2025, 6, 30), "10-Q", ["mdna"])
     judge = Judge(client=ScriptedJudge(supported=True), reverify=feature_history_fake)
-    grounded, failed, _ = judge._check_grounding(structured + narrative, "recovered; timing was temporary")
+    grounded, failed, _, _ = judge._check_grounding(structured + narrative, "recovered; timing was temporary")
     assert grounded is True
     assert failed == []
 
@@ -213,7 +214,7 @@ def test_evaluate_full_path_with_mixed_evidence():
     judge = Judge(
         client=SeqJudge([
             _Response([_ToolUseBlock("submit_grounding",
-                {"supported": True, "unsupported_claims": [], "reasoning": "supported"})]),
+                {"supported": True, "violations": [], "advisories": [], "reasoning": "supported"})]),
             _Response([_ToolUseBlock("submit_judgment",
                 {"confirm": "confirmed", "open_questions": False, "reasoning": "recovered, timing temporary"})]),
         ]),

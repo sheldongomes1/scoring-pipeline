@@ -427,3 +427,51 @@ the lesson body. Chronological order.
 - Post angle: "We fixed our AI agent's biggest bottleneck and users still called it slow —
   because they were staring at a blank spinner. The fix wasn't more speed; it was streaming
   the agent's work so people watch it think. Fast AND legible beats fast alone."
+
+## 2026-07-16 — The judge's own reasons showed it rejects analysis, not fabrication
+- Situation: re-ran the 6-ticker eval on the post-fix stack (batched reverify, BQ balance
+  sheet) after instrumenting the capture with `judge_reasoning`/`ungrounded_items`. The
+  ADR-15 prediction held (PANW: capped/untrusted → resolved/trusted; VRSK: 633s → 214s),
+  but the trusted-rate did NOT recover: still 2/6.
+- What broke / what I assumed: I assumed grounding failures meant the generator was
+  fabricating. Reading the judge's actual reasons, of ~11 flagged items across the 3
+  ABANDONED runs only ~3 are genuine catches (e.g. VRSK: generator conflated a quarterly
+  -1.06% metric with the filing's -50.7% 9-month decline). The rest: rejecting HEDGED
+  framing (INSM was flagged for calling financings "consistent with, not confirmed" — the
+  judge itself says they're "the correct chronological explanation"), demanding
+  plausibility cross-checks of values the INTEGRITY head already re-fetched (VRSK), and —
+  the systemic one — flagging the generator's truthful description of its own tool calls
+  ("period_offset", "resolved_report_date") as "an invented schema not present in the
+  evidence" (STX). ADR-5's visibility split CAUSES that last class: the judge sees only
+  receipts, so the generator narrating its own process is unverifiable by design. Also:
+  INSM flipped resolved/trusted → abandoned/untrusted on identical code+data — judge
+  churn — so a trusted-rate gate at n=6 is statistically meaningless for the ADR-16 A/B.
+- Lesson: instrument the VERDICT REASONS before tuning anything. "Trusted-rate is low"
+  looked like a generator-quality problem and was actually a judge-calibration problem
+  in three separable classes, each with a different owner: rubric wording ("flag any
+  characterization the passages do not support" invites style rejection), architecture
+  (ADR-18's structured output removes process narration from the judged surface), and
+  statistics (verdict churn means gates need bigger n or repeated runs).
+- Fix / rework: pending — rubric fix is a checkpoint decision. ADR-18 implementation
+  removes the STX false-positive class structurally.
+- Post angle: "Our AI safety check kept rejecting our AI's answers. We finally logged the
+  judge's reasons: only 3 of 11 rejections were real. It was punishing careful hedging as
+  if it were lying. If your evaluator's verdicts aren't themselves inspected, you're not
+  measuring your agent — you're measuring your judge."
+
+## 2026-07-16 — A wall-clock guard between turns can't stop a 21-hour turn
+- Situation: investigation 6 of the eval run (FTNT) sat for 77,102 seconds — 21.4 hours —
+  before terminating CAPPED. The `max_seconds=240` guard never fired.
+- What broke / what I assumed: I assumed max_seconds bounded the run. It bounds the LOOP —
+  checked between iterations — so a single blocking client call (Anthropic or
+  BigQuery/GCS; the capture can't say which) is unbounded. One hung socket froze the
+  whole eval overnight; the guard only woke up when the call finally returned.
+- Lesson: a timeout that is checked cooperatively is a lower bound, not an upper bound.
+  Every network client inside the loop needs its own hard timeout (SDK request timeout +
+  bounded retries); the loop-level guard is then the aggregate ceiling, not the only
+  defense. Corollary for evals: one unbounded call serializes the whole batch.
+- Fix / rework: pending — add per-client timeouts (anthropic `timeout=`, BQ/GCS retry
+  deadlines) and log which call was in flight when a turn exceeds budget.
+- Post angle: "Our AI agent had a 4-minute timeout and still ran for 21 hours. The
+  timeout was checked between steps — and one step never came back. Cooperative timeouts
+  are suggestions; only socket-level deadlines are promises."

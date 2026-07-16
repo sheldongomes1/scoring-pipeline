@@ -2,6 +2,29 @@
 
 > **CURRENT POSITION (update this block every session before closing):**
 >
+> - **Date:** 2026-07-16
+> - **Phase:** OUTPUT LEGIBILITY + JUDGE CALIBRATION. Perf work shipped (ADR-15 batched
+>   reverify 124.9s→3.6s; ADR-17 SSE streaming verified through Cloud Run; deploy
+>   relocated into the real qqq-anomaly-lab service behind tryredink.dev; BQ balance
+>   sheet backend). Post-fix 6-ticker eval re-run DONE
+>   (`output/investigator_eval_outputs_postfix.json`; pre-fix baseline preserved in
+>   `_real.json`; capture now records `judge_reasoning`/`ungrounded_items`). Findings:
+>   trusted-rate still 2/6 — NOT a generator problem: only ~3/11 judge rejections were
+>   genuine; the rest punish hedged inference, demand re-verification of
+>   INTEGRITY-checked values, or flag the generator describing its own tools (ADR-5
+>   blind spot). INSM churns trusted↔untrusted on identical inputs → n=6 A/B gate for
+>   ADR-16 is noise. FTNT ran 21.4h under a 240s guard (cooperative timeout ≠ socket
+>   deadline). DECIDED, implementation pending: ADR-18 (structured `submit_findings`
+>   final turn — verdict_sentence/rationale/key_evidence/caveats, every field verified,
+>   verifier by field type) + ADR-19 (two-tier answer-support: violations gate,
+>   advisories inform, ambiguity fails closed). NEXT (agreed order): implement ADR-18+19
+>   in judge/loop/service; per-client hard timeouts (FTNT fix); deterministic UI layer
+>   (verdict card, number formatting, evidence collapsing, mojibake cp1252 bug,
+>   humanized step feed); re-run eval WITH REPEATS to measure churn; only then ADR-16
+>   Haiku A/B. OPEN: interview (deferred); feature_keys.json upstream drift
+>   ([[known_gaps]]); EDGAR total_debt caveat; per-item `why_it_matters` deferred until
+>   judge calibration is proven.
+> - **[historical notes below, oldest first]**
 > - **Date:** 2026-07-14
 > - **Phase:** FULLY REAL & DEPLOYED. Loop + judge + disambiguation graph + tree
 >   (ADR-1…14, 93 tests). All 3 tools read GOLDEN SOURCES: feature_history→BigQuery,
@@ -13,11 +36,10 @@
 >   (`TerminalResult.trusted` — only RESOLVED/INCONCLUSIVE surface as findings; UI
 >   shows a "not grounding-verified" banner for capped/abandoned; cap raised 5→12 so
 >   repair is reachable; `max_seconds` wall-clock guard). Phase 6 eval in qqq-eval-suite
->   (Fable independent judge, forced-tool verdicts, `result_trusted` check). IN FLIGHT:
->   re-measuring the 6-ticker eval now that all tools are real + cap=12. OPEN: interview
+>   (Fable independent judge, forced-tool verdicts, `result_trusted` check). Re-measured
+>   the 6-ticker eval post-fix (see 2026-07-16 entry). OPEN: interview
 >   (deferred by user); feature_keys.json upstream drift ([[known_gaps]]); EDGAR
 >   total_debt may exclude short-term borrowings for some filers (CFA caveat in-module).
-> - **[historical notes below, oldest first]**
 > - **Date:** 2026-07-05
 > - **Phase:** 2 — Single-branch agent loop (in progress; harness proven, live run next).
 > - **Landed so far:** ADR-1 (agentic line + termination + budget), ADR-2

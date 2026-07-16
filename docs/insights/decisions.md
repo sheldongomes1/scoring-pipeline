@@ -1112,3 +1112,55 @@ capture format. Known open risk logged separately: answer-support's over-strictn
 reasoned inference (false ABANDONED on honest refutations, e.g. ALNY 2025-06-30) —
 measure prevalence in the 6-ticker eval BEFORE tuning the rubric; it also contaminates
 the ADR-16 Haiku A/B baseline if unfixed.
+
+## ADR-19: Two-tier answer-support — violations gate, advisories inform
+
+**Date:** 2026-07-16
+**Status:** Accepted — implementation pending (alongside ADR-18)
+
+**Context:** The instrumented eval re-run (post ADR-15, capture now records
+`judge_reasoning`/`ungrounded_items`) measured the open risk flagged in ADR-18: of ~11
+items the answer-support head flagged across the 3 ABANDONED runs, only ~3 were genuine
+catches (best: VRSK — generator presented a -1.06% quarterly metric as representative
+when the filing's 9-month figures show -50.7%). The rest: punishing HEDGED inference
+(INSM failed for calling financings "consistent with, not confirmed" — the judge's own
+reasoning concedes they are "the correct chronological explanation"); demanding
+plausibility cross-checks of values the INTEGRITY head already re-fetched; and flagging
+the generator's truthful description of its own tool schema as "invented" — an ADR-5
+blind spot (the judge sees receipts, never the tool conversation), removed structurally
+by ADR-18's `submit_findings`. Also observed: INSM flipped resolved/trusted →
+abandoned/untrusted on identical code+data — the gate churns on borderline items, making
+a trusted-rate A/B at n=6 (ADR-16's gate) statistically meaningless. The single-bucket
+rubric ("flag any characterization the passages do not support") makes style rejections
+gate the whole run.
+
+**Decision:** Keep the affirmative-support bar; split the judge's output into two tiers.
+`violations[]` (GATE — operationally defined in kind): a figure absent from evidence and
+not derivable; a quote that appears in no passage; a claim a passage contradicts; a
+magnitude/period-basis misrepresentation. `advisories[]` (INFORM — never gate): framing
+and emphasis of supported facts, hedged inference labeled as inference, completeness
+suggestions. Ambiguity FAILS CLOSED: an item the judge cannot confidently classify goes
+in `violations` — the split only releases items affirmatively marked style-only, so the
+false-trusted rate cannot grow through the ambiguous middle. Gate condition: `supported`
+bool AND empty `violations` (disagreement between bool and list → not grounded).
+Advisories flow into the DTO and render under the verdict as judge notes — the
+"flag is a fork" principle (lessons 2026-07-11) applied to the judge itself: the analyst
+decides what a style concern means.
+
+**Alternatives considered:** (a) Relax the bar to contradiction-only — rejected: admits
+unverifiable claims wholesale, raising false-trusted, the one error the gate exists to
+prevent. (b) Keep single-tier strict — rejected by measurement: ~8/11 rejections were
+style-class; honest refutations die ABANDONED, and the trusted-rate signal (which gates
+ADR-16) is dominated by judge noise. (c) Panel / majority-vote judge — deferred: 3× the
+answer-support cost and latency per repair cycle; revisit only if churn persists after
+the split.
+
+**Consequences:** Expected on re-run: INSM-class runs resolve trusted with advisories
+attached; VRSK-class still fails; STX-class removed by ADR-18. Churn should drop — a
+wavering judge now flips an item between advisory and nothing, not between trusted and
+ABANDONED (testable prediction: INSM stops flipping). The UI gains a legitimate home for
+judge commentary, fixing the rendering defect where "supported" commentary items appeared
+as failure reasons. Residual risk owned: tier assignment is itself a model judgment —
+mitigated by in-kind criteria in the rubric plus the fail-closed rule. `submit_grounding`
+schema changes (`violations`, `advisories`); parse defensively per 2026-07-14 ("required
+is a hint"): missing `violations` treated as not-supported, missing `advisories` as `[]`.

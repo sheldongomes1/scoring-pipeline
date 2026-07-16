@@ -41,7 +41,7 @@ from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 REPO = Path(__file__).resolve().parents[1]
@@ -101,7 +101,20 @@ def _anthropic():
 MAX_CONCURRENT = int(os.environ.get("INVESTIGATOR_MAX_CONCURRENT", "2"))
 _slots = threading.Semaphore(MAX_CONCURRENT)
 
-app = FastAPI(title="qqq-investigator", version="0.1.0")
+class UTF8JSONResponse(JSONResponse):
+    """JSON with the charset DECLARED. Starlette's default is a bare
+    `application/json`: the bytes are UTF-8 (verdict text carries em dashes and
+    typographic quotes from the models), but nothing on the wire says so — any
+    hop that falls back to a locale default (cp1252 on Windows clients, some
+    intermediaries/log viewers) mis-decodes exactly as the observed mojibake
+    (`â€"` for an em dash). Declaring the charset at the source removes the
+    guess; spec-compliant fetch/JSON consumers are unaffected. (The SSE endpoint
+    already ships `text/event-stream; charset=utf-8` and ASCII-escaped frames.)"""
+
+    media_type = "application/json; charset=utf-8"
+
+
+app = FastAPI(title="qqq-investigator", version="0.1.0", default_response_class=UTF8JSONResponse)
 
 
 # ── request / response contracts ─────────────────────────────────────────────

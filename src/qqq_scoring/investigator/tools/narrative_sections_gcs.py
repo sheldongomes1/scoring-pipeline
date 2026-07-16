@@ -23,6 +23,10 @@ _BUCKET = "qqq-anomaly-raw-sg"
 _PREFIX = "qqq/narrative"
 SOURCE = "gs://qqq-anomaly-raw-sg/qqq/narrative"
 
+# Hard per-call deadline on GCS reads (2026-07-16 FTNT lesson: one hung network
+# call is unbounded by the loop's between-turns wall-clock guard).
+GCS_DEADLINE_SECONDS = 60.0
+
 # Module-level shared client (latency #3): a fresh storage.Client() per call throws
 # away auth/discovery each time. Built lazily+once, thread-safe, and only when no
 # client is injected (tests still pass their own fake untouched).
@@ -46,7 +50,7 @@ def _find_blob(bucket, ticker: str, report_date: date, form: str):
     10-K filenames don't — so match by form + (report_date for 10-Q)."""
     formkey = form.replace("-", "")          # "10-Q" -> "10Q"
     rd = report_date.isoformat()
-    blobs = list(bucket.list_blobs(prefix=f"{_PREFIX}/{ticker}/"))
+    blobs = list(bucket.list_blobs(prefix=f"{_PREFIX}/{ticker}/", timeout=GCS_DEADLINE_SECONDS))
     for b in blobs:
         name = b.name
         if formkey not in name:
@@ -75,7 +79,7 @@ def narrative_sections_gcs(
     if blob is not None:
         source_path = f"gs://{_BUCKET}/{blob.name}"
         try:
-            filing_sections = json.loads(blob.download_as_text()).get("sections", {})
+            filing_sections = json.loads(blob.download_as_text(timeout=GCS_DEADLINE_SECONDS)).get("sections", {})
         except Exception:
             filing_sections = None
 

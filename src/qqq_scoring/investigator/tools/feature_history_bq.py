@@ -29,6 +29,12 @@ from .contracts import FeatureResult, FeatureStatus, Provenance
 SOURCE = "qqq_finance.period_features"                 # logical source == the fake's key (ADR-9)
 _TABLE = "qqq-anomaly-lab.qqq_finance.period_features"  # fully-qualified for cross-project read
 
+# Hard per-call deadline (2026-07-16 FTNT lesson: the loop's max_seconds is checked
+# between turns, so one hung network call is unbounded by it — a single blocking
+# call froze an eval for 21.4h). Applied to both the query request and the wait
+# for its result; a hung socket now raises instead of hanging the investigation.
+BQ_DEADLINE_SECONDS = 60.0
+
 # Module-level shared client (latency #3): constructing bigquery.Client() is ~1.3s of
 # auth/discovery; the reverify gate calls the backend dozens of times per investigation,
 # so a fresh client per call was pure waste. Built lazily+once, thread-safe, and only
@@ -79,7 +85,12 @@ def _query_history(ticker: str, form: str, features: list[str], client) -> list:
                 bigquery.ScalarQueryParameter("form", "STRING", form),
             ]
         ),
+        timeout=BQ_DEADLINE_SECONDS,   # bound the query REQUEST (hung-socket guard)
     )
+    # Bound the wait for results too — `list(job)` alone waits forever. Injected
+    # test fakes return a plain list (no .result), so fall through for those.
+    if hasattr(job, "result"):
+        job = job.result(timeout=BQ_DEADLINE_SECONDS)
     return list(job)
 
 

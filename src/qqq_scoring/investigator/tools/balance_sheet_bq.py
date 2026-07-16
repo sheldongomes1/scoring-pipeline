@@ -24,6 +24,10 @@ from .contracts import FeatureResult, FeatureStatus, Provenance
 SOURCE = "qqq_finance.balance_sheet_items"
 _TABLE = "qqq-anomaly-lab.qqq_finance.balance_sheet_items"
 
+# Hard per-call deadline — see feature_history_bq.BQ_DEADLINE_SECONDS (2026-07-16
+# FTNT lesson: one hung call is unbounded by the loop's between-turns guard).
+BQ_DEADLINE_SECONDS = 60.0
+
 # Module-level shared client (latency #3) — see feature_history_bq for rationale.
 _CLIENT = None
 _CLIENT_LOCK = threading.Lock()
@@ -63,7 +67,12 @@ def _query_history(ticker: str, form: str, items: list[str], client) -> list:
             bigquery.ScalarQueryParameter("ticker", "STRING", ticker),
             bigquery.ScalarQueryParameter("form", "STRING", form),
         ]),
+        timeout=BQ_DEADLINE_SECONDS,   # bound the query REQUEST (hung-socket guard)
     )
+    # Bound the wait for results too — `list(job)` alone waits forever. Injected
+    # test fakes return a plain list (no .result), so fall through for those.
+    if hasattr(job, "result"):
+        job = job.result(timeout=BQ_DEADLINE_SECONDS)
     return list(job)
 
 

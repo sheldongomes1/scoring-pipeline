@@ -20,6 +20,7 @@ output quality; it does not *close* the loop, so it's a later slice.
 """
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -96,6 +97,39 @@ class TerminalResult:
         finding. `MODEL_STOPPED` has no judge at all. This is the boundary that
         stops an ungrounded capped answer from shipping as a conclusion."""
         return self.reason in (TerminalReason.RESOLVED, TerminalReason.INCONCLUSIVE)
+
+
+class OpTracker:
+    """Names the network call in flight (2026-07-16 FTNT lesson: `max_seconds` is
+    checked BETWEEN turns, so one hung client call is unbounded by it — 21.4h once).
+    The hard bound now lives on each client (SDK request timeout / BQ+GCS deadlines);
+    this tracker is the diagnostic half: `last_operation` always names the most
+    recent blocking call, and when a single call exceeds the loop's per-turn share
+    of `max_seconds` it logs WHICH call ate the budget."""
+
+    def __init__(self, per_op_budget: float | None = None, log: Callable[[str], None] | None = None) -> None:
+        self.per_op_budget = per_op_budget   # the loop's per-turn share of max_seconds
+        self.last_operation: str | None = None
+        self._t0: float | None = None
+        self._log = log if log is not None else (lambda msg: print(msg, file=sys.stderr))
+
+    def begin(self, op: str) -> None:
+        self.last_operation = op
+        self._t0 = time.monotonic()
+
+    def end(self) -> None:
+        if self._t0 is None:
+            return
+        elapsed = time.monotonic() - self._t0
+        self._t0 = None
+        if self.per_op_budget is not None and elapsed > self.per_op_budget:
+            try:
+                self._log(
+                    f"[investigator] slow call: {self.last_operation!r} took {elapsed:.1f}s "
+                    f"(per-turn share of max_seconds is {self.per_op_budget:.1f}s)"
+                )
+            except Exception:  # noqa: BLE001 — diagnostics must never break the loop
+                pass
 
 
 def _text_from(content: Any) -> str:
@@ -382,6 +416,11 @@ def _run_loop(
     # no-judge run that can never repair.
     ceiling = investigation_cap
     started = time.monotonic()
+    # Diagnostic marker for the FTNT-hang class (2026-07-16): name the call in
+    # flight, and log when one call eats more than the loop's per-turn share.
+    tracker = OpTracker(
+        per_op_budget=(max_seconds / max(1, investigation_cap)) if max_seconds else None
+    )
 
     while turns < ceiling:
         # Wall-clock guard (eval #2): bail before a rate-limit/retry storm turns one
@@ -391,6 +430,7 @@ def _run_loop(
             return _mk(TerminalReason.CAP_REACHED, last_verdict)
         turns += 1
         _emit(on_event, {"type": "turn", "n": turns})
+        tracker.begin(f"anthropic messages.create (turn {turns})")
         resp = client.messages.create(
             model=model,
             max_tokens=max_tokens,
@@ -398,6 +438,7 @@ def _run_loop(
             tools=tools,
             messages=messages,
         )
+        tracker.end()
         # Record the assistant turn verbatim so the next request carries full
         # history — the model can only "read the tool_result and decide" if the
         # prior turn (its tool_use) is in the transcript it sees.
@@ -423,7 +464,9 @@ def _run_loop(
                     "name": block.name,
                     "summary": _tool_call_summary(block.name, block.input),
                 })
+                tracker.begin(f"tool dispatch {block.name}")
                 outcome = registry.dispatch(block.name, block.input)
+                tracker.end()
                 evidence.extend(outcome.raw_results)   # full envelope -> judge (ADR-5)
                 # Status only (found / period_not_filed / ...), never payloads —
                 # the step stream is human-facing, not a data channel (ADR-5).
@@ -490,10 +533,12 @@ def _run_loop(
             # The judge heads read the SERIALIZED structured fields (ADR-18), never
             # the generator's free prose; key_evidence goes to the INTEGRITY head.
             _emit(on_event, {"type": "grounding", "status": "checking", "facts": len(evidence)})
+            tracker.begin("judge.evaluate (grounding + grade)")
             verdict: JudgeVerdict = judge.evaluate(
                 predicate or task, _serialize_findings(findings), evidence,
                 key_evidence=findings["key_evidence"],
             )
+            tracker.end()
             last_verdict = verdict
             if verdict.grounded:
                 _emit(on_event, {"type": "grounding", "status": "verified", "facts": len(evidence)})

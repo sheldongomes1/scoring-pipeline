@@ -80,6 +80,22 @@ SYSTEM = (
     "a verdict; a reviewer verifies your evidence before the branch is closed."
 )
 
+# Hard per-request client bounds (2026-07-16 FTNT lesson: the loop's max_seconds
+# is checked between turns, so ONE hung client call froze an investigation for
+# 21.4h). Every Anthropic client this service constructs gets an explicit request
+# timeout + bounded retries; the loop-level guard is the aggregate ceiling, not
+# the only defense. BQ calls below carry their own deadlines for the same reason.
+ANTHROPIC_TIMEOUT_SECONDS = 120.0
+ANTHROPIC_MAX_RETRIES = 2
+BQ_DEADLINE_SECONDS = 30.0
+
+
+def _anthropic():
+    from anthropic import Anthropic
+
+    return Anthropic(timeout=ANTHROPIC_TIMEOUT_SECONDS, max_retries=ANTHROPIC_MAX_RETRIES)
+
+
 # Cost guard: at most this many deep-dives in flight; extra requests get 429
 # (a click retried later is cheaper than an unbounded Opus queue).
 MAX_CONCURRENT = int(os.environ.get("INVESTIGATOR_MAX_CONCURRENT", "2"))
@@ -140,8 +156,9 @@ def _reconstruct_flag_summary(ticker: str, report_date: date) -> str | None:
                     bigquery.ScalarQueryParameter("report_date", "DATE", report_date.isoformat()),
                 ]
             ),
+            timeout=BQ_DEADLINE_SECONDS,   # hung-socket guard (2026-07-16)
         )
-        rows = list(job)
+        rows = list(job.result(timeout=BQ_DEADLINE_SECONDS))
         if not rows:
             return None
         row = rows[0]
@@ -185,7 +202,7 @@ def _live_feature_keys() -> list[str]:
         try:
             from google.cloud import bigquery
 
-            table = bigquery.Client(project=BQ_PROJECT).get_table(FH_TABLE)
+            table = bigquery.Client(project=BQ_PROJECT).get_table(FH_TABLE, timeout=BQ_DEADLINE_SECONDS)
             cols = {f.name for f in table.schema}
             live = [k for k in FEATURE_KEYS if k in cols]
             if live:
@@ -213,12 +230,10 @@ def _registry() -> ToolRegistry:
 
 
 def _judge():
-    from anthropic import Anthropic
-
     # Source-routed reverify map (ADR-9): each structured backend keyed by the
     # source its evidence carries. feature_history re-fetches against the REAL
     # table, balance_sheet against REAL EDGAR — grounding replays the request (ADR-13).
-    return Judge(client=Anthropic(), reverify={FH_SOURCE: feature_history_bq, BS_SOURCE: balance_sheet_backend})
+    return Judge(client=_anthropic(), reverify={FH_SOURCE: feature_history_bq, BS_SOURCE: balance_sheet_backend})
 
 
 def _evidence_view(evidence: list) -> list[dict]:
@@ -339,14 +354,12 @@ def investigate(req: InvestigateRequest, x_api_token: str | None = Header(defaul
             predicate=req.predicate,
         )
 
-        from anthropic import Anthropic
-
         started = time.monotonic()
         # Single-branch deep-dive only (MVP): one click = one run_branch. No
         # auto-expand — recursive tree growth stays a deliberate, human-steered step.
         # max_seconds=240 keeps the investigation under Cloud Run's 300s request
         # timeout (eval #2 wall-clock guard) — it returns CAP_REACHED rather than a 504.
-        run_branch(branch, flag, Anthropic(), _registry(), _judge(), system=SYSTEM, max_seconds=240)
+        run_branch(branch, flag, _anthropic(), _registry(), _judge(), system=SYSTEM, max_seconds=240)
         return build_response_dto(branch, flag, time.monotonic() - started)
     except HTTPException:
         raise
@@ -436,11 +449,9 @@ async def investigate_stream(
                 predicate=req.predicate,
             )
 
-            from anthropic import Anthropic
-
             started = time.monotonic()
             _run_branch_streaming(
-                branch, flag, Anthropic(), _registry(), _judge(),
+                branch, flag, _anthropic(), _registry(), _judge(),
                 system=SYSTEM, max_seconds=240, on_event=events.put,
             )
             # Final frame: the SAME DTO shape POST /investigate returns.

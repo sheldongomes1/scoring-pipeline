@@ -218,6 +218,56 @@ def test_wall_clock_guard_bails_before_running():
     assert client.calls == []   # guard tripped before any model call
 
 
+def test_op_tracker_marks_and_flags_slow_calls():
+    """2026-07-16 FTNT hang: the tracker names the call in flight and logs when a
+    single call exceeds the per-turn share of max_seconds. No sleeps: a negative
+    budget makes any real elapsed time 'over budget'."""
+    from qqq_scoring.investigator.loop import OpTracker
+
+    logged = []
+    t = OpTracker(per_op_budget=-1.0, log=logged.append)
+    t.begin("anthropic messages.create (turn 1)")
+    assert t.last_operation == "anthropic messages.create (turn 1)"
+    t.end()
+    assert len(logged) == 1 and "messages.create" in logged[0]
+
+    quiet = []
+    t2 = OpTracker(per_op_budget=None, log=quiet.append)   # no max_seconds → no flagging
+    t2.begin("tool dispatch feature_history")
+    t2.end()
+    assert quiet == []
+    assert t2.last_operation == "tool dispatch feature_history"
+
+    t3 = OpTracker(per_op_budget=-1.0, log=quiet.append)
+    t3.end()   # end without begin is a no-op, not a crash
+    assert quiet == []
+
+
+def test_loop_tracks_in_flight_operations():
+    """The loop marks each blocking call (model turn, tool dispatch) so a blown
+    budget can name the suspect."""
+    from qqq_scoring.investigator import loop as loop_mod
+
+    ops: list[str] = []
+    orig = loop_mod.OpTracker
+
+    class Recording(orig):
+        def begin(self, op):
+            ops.append(op)
+            super().begin(op)
+
+    loop_mod.OpTracker = Recording
+    try:
+        client = ScriptedClient(
+            [_tool_use_turn(offset=1), _Response("end_turn", [_TextBlock("done")])]
+        )
+        run_investigation(client, _registry(), "task", max_seconds=300)
+    finally:
+        loop_mod.OpTracker = orig
+    assert any("messages.create" in o for o in ops)
+    assert any("feature_history" in o for o in ops)
+
+
 def _run() -> None:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for t in tests:

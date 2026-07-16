@@ -23,7 +23,7 @@ class _FakeBQ:
     def __init__(self, rows):
         self._rows = rows
 
-    def query(self, sql, job_config=None):
+    def query(self, sql, job_config=None, timeout=None):
         return list(self._rows)
 
 

@@ -112,11 +112,14 @@ def main() -> None:
     import anthropic
     bq = bigquery.Client(project=BQ_PROJECT)
     rows = list(bq.query(SAMPLE_QUERY, job_config=bigquery.QueryJobConfig(
-        query_parameters=[bigquery.ScalarQueryParameter("n", "INT64", args.n)])))
+        query_parameters=[bigquery.ScalarQueryParameter("n", "INT64", args.n)]),
+        timeout=60.0).result(timeout=60.0))
     print(f"Running {len(rows)} investigations…")
 
-    generator = anthropic.Anthropic()
-    judge = Judge(client=anthropic.Anthropic(),
+    # Hard per-request bounds (2026-07-16: one hung, timeout-less call serialized
+    # the whole eval for 21.4h — the loop's max_seconds cannot interrupt a call).
+    generator = anthropic.Anthropic(timeout=120.0, max_retries=2)
+    judge = Judge(client=anthropic.Anthropic(timeout=120.0, max_retries=2),
                   reverify={FH_SOURCE: feature_history_bq, BS_SOURCE: bs_backend})
     records = []
     for i, row in enumerate(rows, 1):

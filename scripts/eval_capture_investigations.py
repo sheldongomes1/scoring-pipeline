@@ -107,6 +107,13 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=6)
     ap.add_argument("--out", default=str(REPO / "output" / "investigator_eval_outputs.json"))
+    # ADR-19 consequence: the judge churns on borderline items (INSM flipped
+    # trusted/untrusted on identical code+data), so a trusted-rate gate at n=6
+    # single runs is statistically meaningless. --repeat N runs each sampled
+    # branch N times; records carry `run_index` and (when N>1) a `_rN` trace_id
+    # suffix so the eval can measure verdict churn, not just point rates.
+    ap.add_argument("--repeat", type=int, default=1,
+                    help="run each sampled branch this many times (default 1)")
     args = ap.parse_args()
 
     import anthropic
@@ -121,52 +128,63 @@ def main() -> None:
     generator = anthropic.Anthropic(timeout=120.0, max_retries=2)
     judge = Judge(client=anthropic.Anthropic(timeout=120.0, max_retries=2),
                   reverify={FH_SOURCE: feature_history_bq, BS_SOURCE: bs_backend})
+    repeat = max(1, args.repeat)
     records = []
     for i, row in enumerate(rows, 1):
         rd = row["report_date"]  # a date
-        flag = Flag(ticker=row["ticker"], report_date=rd,
-                    form=row["form_type"] or "10-Q", summary=_flag_summary(row))
-        branch = Branch(id=row["branch_id"], hypothesis=row["hypothesis"],
-                        rationale=row["rationale"], predicate=row["predicate"])
-        t0 = time.time()
-        try:
-            run_branch(branch, flag, generator, _registry(), judge, system=SYSTEM, max_seconds=240)
-            r = branch.result
-            rec = {
-                "trace_id": f"{flag.ticker}_{row['calendar_quarter']}_{branch.id}",
-                "ticker": flag.ticker, "calendar_quarter": row["calendar_quarter"],
-                "report_date": rd.isoformat(), "branch_id": branch.id,
-                "hypothesis": branch.hypothesis, "predicate": branch.predicate,
-                "key_question": row.get("key_question"),
-                "terminal_state": branch.status.value,
-                "trusted": r.trusted,   # did the answer pass grounding cleanly? (Fable health check)
-                "grounded": r.verdict.grounded if r.verdict else None,
-                "confirm": (r.verdict.confirm.value if r.verdict and r.verdict.confirm else None),
-                "open_questions": r.verdict.open_questions if r.verdict else None,
-                # Judge-calibration fields (ADR-18 open risk): WHY grounding failed, so the
-                # eval can separate fabrication catches from interpretive-leap rejections.
-                "judge_reasoning": r.verdict.reasoning if r.verdict else None,
-                "ungrounded_items": list(r.verdict.ungrounded_items) if r.verdict else None,
-                "deterministic_failure": r.verdict.deterministic_failure if r.verdict else None,
-                # ADR-18/19 structured findings + judge notes (additive capture fields).
-                "verdict_sentence": r.verdict_sentence,
-                "rationale": r.rationale,
-                "key_evidence": list(r.key_evidence),
-                "caveats": list(r.caveats),
-                "advisories": list(r.advisories),
-                "final_text": r.final_text,
-                "evidence": _evidence_view(r.evidence),
-                "tool_calls": r.tool_calls, "iterations": r.iterations,
-                "elapsed_seconds": round(time.time() - t0, 1),
-            }
-            print(f"  [{i}/{len(rows)}] {flag.ticker} {branch.id} → {branch.status.value} "
-                  f"({rec['elapsed_seconds']}s, {r.tool_calls} tools)")
-        except Exception as e:
-            rec = {"trace_id": f"{flag.ticker}_{row['calendar_quarter']}_{branch.id}",
-                   "ticker": flag.ticker, "error": f"{type(e).__name__}: {e}",
-                   "elapsed_seconds": round(time.time() - t0, 1)}
-            print(f"  [{i}/{len(rows)}] {flag.ticker} {branch.id} ERROR: {e}")
-        records.append(rec)
+        for run_index in range(1, repeat + 1):
+            # A FRESH Branch per run — run_branch mutates status/result in place,
+            # so reusing one object would leak run N-1's state into run N.
+            flag = Flag(ticker=row["ticker"], report_date=rd,
+                        form=row["form_type"] or "10-Q", summary=_flag_summary(row))
+            branch = Branch(id=row["branch_id"], hypothesis=row["hypothesis"],
+                            rationale=row["rationale"], predicate=row["predicate"])
+            # trace_id stays byte-identical to today at --repeat 1; repeated runs
+            # get an _rN suffix so records stay unique per run.
+            base_trace = f"{flag.ticker}_{row['calendar_quarter']}_{branch.id}"
+            trace_id = f"{base_trace}_r{run_index}" if repeat > 1 else base_trace
+            tag = f"[{i}/{len(rows)} r{run_index}/{repeat}]" if repeat > 1 else f"[{i}/{len(rows)}]"
+            t0 = time.time()
+            try:
+                run_branch(branch, flag, generator, _registry(), judge, system=SYSTEM, max_seconds=240)
+                r = branch.result
+                rec = {
+                    "trace_id": trace_id,
+                    "run_index": run_index,
+                    "ticker": flag.ticker, "calendar_quarter": row["calendar_quarter"],
+                    "report_date": rd.isoformat(), "branch_id": branch.id,
+                    "hypothesis": branch.hypothesis, "predicate": branch.predicate,
+                    "key_question": row.get("key_question"),
+                    "terminal_state": branch.status.value,
+                    "trusted": r.trusted,   # did the answer pass grounding cleanly? (Fable health check)
+                    "grounded": r.verdict.grounded if r.verdict else None,
+                    "confirm": (r.verdict.confirm.value if r.verdict and r.verdict.confirm else None),
+                    "open_questions": r.verdict.open_questions if r.verdict else None,
+                    # Judge-calibration fields (ADR-18 open risk): WHY grounding failed, so the
+                    # eval can separate fabrication catches from interpretive-leap rejections.
+                    "judge_reasoning": r.verdict.reasoning if r.verdict else None,
+                    "ungrounded_items": list(r.verdict.ungrounded_items) if r.verdict else None,
+                    "deterministic_failure": r.verdict.deterministic_failure if r.verdict else None,
+                    # ADR-18/19 structured findings + judge notes (additive capture fields).
+                    "verdict_sentence": r.verdict_sentence,
+                    "rationale": r.rationale,
+                    "key_evidence": list(r.key_evidence),
+                    "caveats": list(r.caveats),
+                    "advisories": list(r.advisories),
+                    "final_text": r.final_text,
+                    "evidence": _evidence_view(r.evidence),
+                    "tool_calls": r.tool_calls, "iterations": r.iterations,
+                    "elapsed_seconds": round(time.time() - t0, 1),
+                }
+                print(f"  {tag} {flag.ticker} {branch.id} → {branch.status.value} "
+                      f"({rec['elapsed_seconds']}s, {r.tool_calls} tools)")
+            except Exception as e:
+                rec = {"trace_id": trace_id,
+                       "run_index": run_index,
+                       "ticker": flag.ticker, "error": f"{type(e).__name__}: {e}",
+                       "elapsed_seconds": round(time.time() - t0, 1)}
+                print(f"  {tag} {flag.ticker} {branch.id} ERROR: {e}")
+            records.append(rec)
 
     Path(args.out).write_text(json.dumps(records, indent=2))
     print(f"\nWrote {len(records)} records → {args.out}  (captured_at {datetime.now(timezone.utc).isoformat()})")

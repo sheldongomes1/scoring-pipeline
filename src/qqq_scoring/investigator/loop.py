@@ -30,7 +30,10 @@ from .judge import Confirm, JudgeVerdict
 from .registry import ToolRegistry
 
 DEFAULT_MODEL = "claude-opus-4-8"  # generator tier (ADR-3)
-DEFAULT_MAX_TOKENS = 2048
+# 4096, not 2048: since ADR-18 the final turn is a large JSON tool call
+# (verdict_sentence + rationale + 3-6 key_evidence objects + caveats), and a
+# max_tokens cut mid-tool_use is a protocol event, not a prose truncation.
+DEFAULT_MAX_TOKENS = 4096
 # Raised 5→12 (Fable health check): real investigations spend ~4 turns gathering
 # before the first proposal, so at cap=5 the repair loop was UNREACHABLE (repair_cap
 # was dead code) — every real run terminated CAPPED with an ungraded/rejected answer.
@@ -581,6 +584,23 @@ def _run_loop(
         text = _text_from(resp.content)
         if text:
             last_answer = text
+
+        # Protocol guard: a non-"tool_use" stop_reason can still carry tool_use
+        # blocks — max_tokens truncating the model mid-call is the common case
+        # (ADR-18 made the final turn a large JSON tool call, so the token limit
+        # now truncates protocol, not prose). The API requires a tool_result for
+        # EVERY tool_use id in the next message; a bare text nudge here poisons
+        # the transcript and 400s every subsequent request.
+        dangling = [b for b in resp.content if getattr(b, "type", None) == "tool_use"]
+        if dangling:
+            messages.append({"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": b.id, "is_error": True,
+                 "content": ("This tool call was cut off before it completed "
+                             f"(stop_reason={resp.stop_reason}). Re-issue the call, "
+                             "more concisely if it was long.")}
+                for b in dangling
+            ]})
+            continue
 
         if judge is None:
             # ADR-4 path: no judge, a bare end_turn is terminal (MODEL_STOPPED).

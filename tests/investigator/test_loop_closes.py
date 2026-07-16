@@ -268,6 +268,36 @@ def test_loop_tracks_in_flight_operations():
     assert any("feature_history" in o for o in ops)
 
 
+def test_max_tokens_truncated_tool_use_gets_a_tool_result():
+    """Protocol guard: a max_tokens stop that carries a (truncated) tool_use block
+    must be answered with an is_error tool_result — a bare text nudge would 400
+    every subsequent request (live INSM failure, 2026-07-16). The model then
+    re-issues the call and the loop completes normally."""
+    truncated = _Response(
+        "max_tokens",
+        [_ToolUseBlock("tu_cut", "submit_findings", {"verdict_sentence": "half a sen"})],
+    )
+    client = ScriptedClient(
+        [
+            _tool_use_turn(offset=1),
+            truncated,
+            _Response("end_turn", [_TextBlock("done after retry")]),
+        ]
+    )
+    res = run_investigation(client, _registry(), "Did OCF/NI recover?")
+    assert res.reason is TerminalReason.MODEL_STOPPED
+    # The user message immediately after the truncated assistant turn must
+    # answer tu_cut.
+    after = client.calls[2]["messages"]
+    idx = next(i for i, m in enumerate(after)
+               if m["role"] == "assistant" and any(
+                   getattr(b, "id", None) == "tu_cut" for b in m["content"]))
+    reply = after[idx + 1]
+    assert reply["role"] == "user"
+    blocks = reply["content"]
+    assert any(b.get("tool_use_id") == "tu_cut" and b.get("is_error") for b in blocks)
+
+
 def _run() -> None:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for t in tests:

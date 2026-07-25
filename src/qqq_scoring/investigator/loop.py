@@ -434,8 +434,22 @@ def _run_loop(
     """The loop body (see `run_investigation`). Split out so the terminal `verdict`
     event can be emitted exactly once around the loop's several return points."""
     # ADR-18: the task carries the instruction that submit_findings IS the exit.
+    # The period-wording paragraph is generator discipline for the ADR-21 judge
+    # (user ruling 2026-07-25): the judge gates on stated calendar relations the
+    # evidence dates contradict, so the generator must name relations precisely.
+    # It lives HERE — the one seam every caller (service, batch, eval, scripts)
+    # flows through — not in per-caller system prompts that can drift.
     messages: list[dict] = [{"role": "user", "content": (
-        f"{task}\n\nWhen you have gathered enough evidence, conclude by calling the "
+        f"{task}\n\n"
+        "Period-wording discipline: the data tools address periods POSITIONALLY "
+        "over FILED 10-Qs and may skip fiscal year-end (10-K) periods, so fetched "
+        "periods are not always calendar-adjacent. Name period relations exactly "
+        "as the dates show them — 'the preceding filed 10-Q (2024-09-30)', 'five "
+        "quarters earlier' — and never write 'sequential', 'the immediately "
+        "preceding quarter', or 'prior year' unless the dates truly are that "
+        "relation. A reviewer rejects stated calendar relations the dates "
+        "contradict, even when the dates are printed alongside.\n\n"
+        f"When you have gathered enough evidence, conclude by calling the "
         f"{FINDINGS_TOOL_NAME} tool — that is the only way to finish the investigation."
     )}]
     tools = registry.tool_definitions() + [_submit_findings_tool()]

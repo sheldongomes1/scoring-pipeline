@@ -18,14 +18,33 @@
 >   under `Anthropic(timeout=120)` — SDK timeouts bound byte-gaps, not duration;
 >   FTNT now caps at exactly 240.0s. Mid-eval credit exhaustion killed runs 10–18
 >   once (billing = availability dependency); `--only` subset-rerun flag landed,
->   splice-by-trace_id repaired the file. NEXT (agreed): judge-rubric boundary
->   calibration — arithmetic identities + flag-premise restatements move to
->   advisories — testable OFFLINE against the 18 captured transcripts (judge-only
->   calls, no new investigations); then repeat-eval to confirm churn drops; ONLY
->   then ADR-16 Haiku A/B. Still open: deterministic UI layer (verdict card,
->   number formatting, evidence collapsing, humanized step feed — mojibake fixed);
->   STX/FTNT never converge at cap (cap tuning); interview (deferred);
->   feature_keys.json upstream drift; EDGAR total_debt caveat.
+>   splice-by-trace_id repaired the file. ADR-21 SHIPPED & MEASURED (same day,
+>   3 iterations on the new offline replay harness
+>   `scripts/replay_judge_answer_support.py`): per-claim answer-support (C-lite) —
+>   `submit_grounding` v2 enumerates+classifies every claim, gate computed in
+>   code; predicate passed as external context (premise blind spot closed);
+>   iteration fixes: max_tokens 2048→8192 (15/18 transcripts had truncated to
+>   EMPTY claims — deterministic truncation impersonating "stable" verdicts),
+>   truncation now a NAMED failure; summary `supported` bool REMOVED (stance
+>   leaked through it — PANW r3 classified all claims clean then said
+>   supported=false 3/3); period-wording RULING (user, option b): stated calendar
+>   relations the dates contradict ("sequential"/"prior year") GATE even with
+>   dates printed — precise wording ("preceding filed 10-Q") is the generator's
+>   job. FINAL step-1 numbers (clean grid, 0 errors/truncations): pure judge
+>   churn 9/18 → 6/18 (≤3/18 prediction MISSED → ladder step 2 triggered);
+>   stable-passes 3→8; INSM r2 genuine period catch gates 3/3; STX arithmetic
+>   passes 3/3; PANW r3 "prior year" gates 3/3 — note the LIVE judge had trusted
+>   that run; the calibrated head is more correct than the production judgment it
+>   replayed. All 6 residual churners flip on 0↔1 borderline claims. NEXT:
+>   ladder step 2 — 3 parallel votes over the per-claim form; OPEN DESIGN Q:
+>   claims don't align 1:1 across independent enumerations, so "majority per
+>   claim" needs either fuzzy claim-matching or gate-level majority over
+>   decomposed votes (proposed; user to ratify). Then: generator wording
+>   discipline ("preceding filed 10-Q" phrasing) in its system prompt; live
+>   repeat-eval; ONLY then ADR-16 Haiku A/B. Still open: deterministic UI layer
+>   (verdict card, number formatting, evidence collapsing, humanized step feed —
+>   mojibake fixed); STX/FTNT never converge at cap (cap tuning); interview
+>   (deferred); feature_keys.json upstream drift; EDGAR total_debt caveat.
 > - **[historical notes below, newest first]**
 > - **Date:** 2026-07-16
 > - **Phase:** OUTPUT LEGIBILITY + JUDGE CALIBRATION. Perf work shipped (ADR-15 batched

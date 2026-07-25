@@ -114,6 +114,12 @@ def main() -> None:
     # suffix so the eval can measure verdict churn, not just point rates.
     ap.add_argument("--repeat", type=int, default=1,
                     help="run each sampled branch this many times (default 1)")
+    # Subset re-runs (2026-07-24: credit exhaustion killed runs 10-18 mid-eval).
+    # Keeps --n at the ORIGINAL sample size so the deterministic top-N query
+    # returns the same cohort, then filters — the kept rows are byte-identical
+    # to the ones the failed run saw.
+    ap.add_argument("--only", default=None,
+                    help="comma-separated tickers: run only these rows of the sample")
     args = ap.parse_args()
 
     import anthropic
@@ -121,6 +127,12 @@ def main() -> None:
     rows = list(bq.query(SAMPLE_QUERY, job_config=bigquery.QueryJobConfig(
         query_parameters=[bigquery.ScalarQueryParameter("n", "INT64", args.n)]),
         timeout=60.0).result(timeout=60.0))
+    if args.only:
+        only = {t.strip().upper() for t in args.only.split(",") if t.strip()}
+        rows = [r for r in rows if r["ticker"] in only]
+        missing = only - {r["ticker"] for r in rows}
+        if missing:
+            raise SystemExit(f"--only tickers not in the top-{args.n} sample: {sorted(missing)}")
     print(f"Running {len(rows)} investigations…")
 
     # Hard per-request bounds (2026-07-16: one hung, timeout-less call serialized

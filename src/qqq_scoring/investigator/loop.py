@@ -21,6 +21,7 @@ output quality; it does not *close* the loop, so it's a later slice.
 from __future__ import annotations
 
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -133,6 +134,51 @@ class OpTracker:
                 )
             except Exception:  # noqa: BLE001 — diagnostics must never break the loop
                 pass
+
+
+class HardDeadlineExceeded(Exception):
+    """A single blocking call outlived the loop's remaining wall-clock budget."""
+
+    def __init__(self, operation: str, seconds: float) -> None:
+        self.operation = operation
+        self.seconds = seconds
+        super().__init__(f"{operation!r} exceeded hard deadline of {seconds:.1f}s")
+
+
+def _call_with_deadline(fn: Callable[[], Any], seconds: float | None, operation: str) -> Any:
+    """Run `fn()` under a NON-cooperative wall-clock bound.
+
+    2026-07-24 (STX r3): a `messages.create` call ran 3674.8s under
+    `Anthropic(timeout=120.0, max_retries=2)`. SDK/socket timeouts bound the gap
+    between bytes — and timed-out attempts are themselves retried — so they are a
+    lower bound in exactly the way `max_seconds` was (the FTNT lesson, one level
+    down). The only deadline we control outright is out-of-band: run the call in
+    a daemon worker, `join` with a timeout, and on expiry hand control back to
+    the loop. The worker (and its socket) is abandoned, not killed — `daemon=True`
+    means it cannot block interpreter exit, and the loop terminates the run
+    rather than reusing the poisoned turn.
+
+    `seconds=None` (no `max_seconds` set) runs `fn()` inline — byte-identical
+    behaviour for tests and callers that opt out of the wall-clock guard.
+    """
+    if seconds is None:
+        return fn()
+    box: dict[str, Any] = {}
+
+    def _worker() -> None:
+        try:
+            box["value"] = fn()
+        except BaseException as exc:  # noqa: BLE001 — re-raised in the caller below
+            box["exc"] = exc
+
+    worker = threading.Thread(target=_worker, daemon=True, name=f"investigator:{operation}")
+    worker.start()
+    worker.join(seconds)
+    if worker.is_alive():
+        raise HardDeadlineExceeded(operation, seconds)
+    if "exc" in box:
+        raise box["exc"]
+    return box["value"]
 
 
 def _text_from(content: Any) -> str:
@@ -425,6 +471,15 @@ def _run_loop(
         per_op_budget=(max_seconds / max(1, investigation_cap)) if max_seconds else None
     )
 
+    def _remaining() -> float | None:
+        """Per-call HARD deadline = the wall-clock budget still unspent. This is
+        what makes `max_seconds` a true upper bound: no single blocking call may
+        outlive what is left of the run's budget. (Floor of 1s so a call starting
+        at the buzzer gets a beat instead of a zero timeout.)"""
+        if max_seconds is None:
+            return None
+        return max(1.0, max_seconds - (time.monotonic() - started))
+
     while turns < ceiling:
         # Wall-clock guard (eval #2): bail before a rate-limit/retry storm turns one
         # investigation into a 38-minute run. Terminates CAP_REACHED (budget exhausted)
@@ -434,13 +489,21 @@ def _run_loop(
         turns += 1
         _emit(on_event, {"type": "turn", "n": turns})
         tracker.begin(f"anthropic messages.create (turn {turns})")
-        resp = client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=system,
-            tools=tools,
-            messages=messages,
-        )
+        try:
+            resp = _call_with_deadline(
+                lambda: client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    system=system,
+                    tools=tools,
+                    messages=messages,
+                ),
+                _remaining(),
+                tracker.last_operation or "messages.create",
+            )
+        except HardDeadlineExceeded:
+            tracker.end()  # logs which call ate the budget
+            return _mk(TerminalReason.CAP_REACHED, last_verdict)
         tracker.end()
         # Record the assistant turn verbatim so the next request carries full
         # history — the model can only "read the tool_result and decide" if the
@@ -468,7 +531,15 @@ def _run_loop(
                     "summary": _tool_call_summary(block.name, block.input),
                 })
                 tracker.begin(f"tool dispatch {block.name}")
-                outcome = registry.dispatch(block.name, block.input)
+                try:
+                    outcome = _call_with_deadline(
+                        lambda: registry.dispatch(block.name, block.input),
+                        _remaining(),
+                        tracker.last_operation or "tool dispatch",
+                    )
+                except HardDeadlineExceeded:
+                    tracker.end()
+                    return _mk(TerminalReason.CAP_REACHED, last_verdict)
                 tracker.end()
                 evidence.extend(outcome.raw_results)   # full envelope -> judge (ADR-5)
                 # Status only (found / period_not_filed / ...), never payloads —
@@ -537,10 +608,18 @@ def _run_loop(
             # the generator's free prose; key_evidence goes to the INTEGRITY head.
             _emit(on_event, {"type": "grounding", "status": "checking", "facts": len(evidence)})
             tracker.begin("judge.evaluate (grounding + grade)")
-            verdict: JudgeVerdict = judge.evaluate(
-                predicate or task, _serialize_findings(findings), evidence,
-                key_evidence=findings["key_evidence"],
-            )
+            try:
+                verdict = _call_with_deadline(
+                    lambda: judge.evaluate(
+                        predicate or task, _serialize_findings(findings), evidence,
+                        key_evidence=findings["key_evidence"],
+                    ),
+                    _remaining(),
+                    tracker.last_operation or "judge.evaluate",
+                )
+            except HardDeadlineExceeded:
+                tracker.end()
+                return _mk(TerminalReason.CAP_REACHED, last_verdict)
             tracker.end()
             last_verdict = verdict
             if verdict.grounded:

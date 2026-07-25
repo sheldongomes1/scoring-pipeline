@@ -298,6 +298,35 @@ def test_max_tokens_truncated_tool_use_gets_a_tool_result():
     assert any(b.get("tool_use_id") == "tu_cut" and b.get("is_error") for b in blocks)
 
 
+def test_hard_deadline_bounds_a_hung_client_call():
+    """2026-07-24 (STX r3): a messages.create call ran 3674.8s under
+    `Anthropic(timeout=120)` — SDK/socket timeouts bound byte-gaps, not total call
+    duration, so they are cooperative in exactly the way `max_seconds` was (FTNT
+    lesson, one level down). The loop now enforces its own out-of-band deadline:
+    a call that outlives the remaining `max_seconds` budget is abandoned in a
+    daemon worker and the run terminates CAP_REACHED promptly."""
+    import threading
+    import time
+
+    release = threading.Event()
+
+    class _HungMessages:
+        def create(self, **kwargs):
+            release.wait(30)  # a "wedged" call: alive, yielding nothing
+            return _tool_use_turn(0)
+
+    class HungClient:
+        messages = _HungMessages()
+
+    t0 = time.monotonic()
+    res = run_investigation(HungClient(), _registry(), "task", max_seconds=1.0)
+    elapsed = time.monotonic() - t0
+    release.set()  # unpark the abandoned worker so it exits promptly
+    assert res.reason is TerminalReason.CAP_REACHED
+    assert res.trusted is False
+    assert elapsed < 5.0, f"hard deadline did not bind: {elapsed:.1f}s elapsed"
+
+
 def _run() -> None:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for t in tests:

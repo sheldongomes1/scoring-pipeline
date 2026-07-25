@@ -7,6 +7,7 @@ support) — all deterministic, with a scripted judge client for the model call.
 Run: `python tests/investigator/test_narrative.py`
 """
 import sys
+import threading
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -78,19 +79,21 @@ class _SeqMessages:
         self._c = c
 
     def create(self, **kwargs):
-        self._c.calls.append(kwargs)
-        turn = self._c._turns[self._c._i]
-        self._c._i += 1
-        return turn
+        with self._c._lock:   # 3 parallel answer-support votes (ADR-21 step 2b)
+            self._c.calls.append(kwargs)
+            turn = self._c._turns[self._c._i]
+            self._c._i += 1
+            return turn
 
 
 class SeqJudge:
-    """Returns scripted turns in order — for evaluate(): grounding call, then C/O."""
+    """Returns scripted turns in order — for evaluate(): grounding votes, then C/O."""
 
     def __init__(self, turns):
         self.calls = []
         self._turns = turns
         self._i = 0
+        self._lock = threading.Lock()
         self.messages = _SeqMessages(self)
 
 
@@ -216,14 +219,14 @@ def test_evaluate_full_path_with_mixed_evidence():
     structured = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
     narrative = narrative_sections_fake("AAPL", date(2025, 6, 30), "10-Q", ["mdna"])
     judge = Judge(
-        client=SeqJudge([
-            _Response([_ToolUseBlock("submit_grounding",
+        client=SeqJudge(
+            [_Response([_ToolUseBlock("submit_grounding",
                 {"claims": [{"claim": "answer matches evidence",
                              "classification": "supported", "basis": "supported"}],
-                 "supported": True, "reasoning": "supported"})]),
-            _Response([_ToolUseBlock("submit_judgment",
-                {"confirm": "confirmed", "open_questions": False, "reasoning": "recovered, timing temporary"})]),
-        ]),
+                 "reasoning": "supported"})])] * 3   # one per vote (ADR-21 step 2b)
+            + [_Response([_ToolUseBlock("submit_judgment",
+                {"confirm": "confirmed", "open_questions": False, "reasoning": "recovered, timing temporary"})])],
+        ),
         reverify=feature_history_fake,
     )
     verdict = judge.evaluate(

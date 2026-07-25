@@ -31,6 +31,13 @@ from .tools.contracts import FeatureResult, GroundingMode
 JUDGE_MODEL = "claude-sonnet-5"  # cheaper tier than the Opus generator (ADR-6);
 #                                  same family, so only PARTIAL decorrelation.
 
+# ADR-21 ladder step 2(b): parallel answer-support votes, gate-level majority.
+# Measured basis: after per-claim decomposition, all residual churn (6/18) flipped
+# on 0↔1 borderline claims — single votes wobbling, not clumped stance. Majority
+# over decomposed votes stabilizes exactly that; it does not entrench stance the
+# way voting over the old holistic head would have (the clumps are gone).
+ANSWER_SUPPORT_VOTES = 3
+
 # A function that independently re-fetches from the golden source. Same signature
 # as `feature_history` — inject the fake today, the real BQ tool later (ADR-6).
 ReverifyFn = Callable[[str, date, int, list], list[FeatureResult]]
@@ -200,13 +207,28 @@ def _grounding_tool() -> dict:
     }
 
 
+def _dedupe(items) -> list[str]:
+    """Order-preserving exact-string dedupe (vote aggregation, ADR-21 step 2b)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for x in items:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
 class Judge:
     # Sentinel for "no reverify backend for this source" cached in the memo, kept
     # distinct from a legitimately-cached None (feature absent from the fresh row).
     _NO_BACKEND = object()
 
-    def __init__(self, client: Any, reverify: "ReverifyFn | dict[str, ReverifyFn]", model: str = JUDGE_MODEL) -> None:
+    def __init__(
+        self, client: Any, reverify: "ReverifyFn | dict[str, ReverifyFn]",
+        model: str = JUDGE_MODEL, support_votes: int = ANSWER_SUPPORT_VOTES,
+    ) -> None:
         self._client = client       # the judge MODEL client (C, O only)
+        self._support_votes = max(1, support_votes)  # ADR-21 ladder step 2(b)
         # Deterministic re-fetch backend(s) for G (ADR-9). A single callable is the
         # ONE-structured-backend shorthand; a {source: callable} map routes each item
         # to the backend that produced it, keyed by provenance.source. The map is
@@ -408,7 +430,49 @@ class Judge:
     def _check_answer_support(
         self, answer: str, evidence: list, context: str = ""
     ) -> tuple[bool, list[str], list[str]]:
-        """The ANSWER-SUPPORT head of G — per-claim per ADR-21 (v1: ADR-13/19): does
+        """The ANSWER-SUPPORT head of G — per-claim votes with gate-level majority
+        (ADR-21 ladder step 2b). Runs `support_votes` independent `_answer_support_vote`
+        calls in parallel; the run gates only if a MAJORITY of votes found at least
+        one violation. Violations surfaced = union of the failing votes' items
+        (deduped) — the majority side's reasons, which feed the repair prompt.
+        Advisories = union across ALL votes (they never gate; more information is
+        strictly better for the UI's judge notes).
+
+        A vote that raises (transient network error) counts as a FAIL vote — a
+        vote we couldn't verify is not a pass (fail closed) — but if EVERY vote
+        raised, the first error is re-raised: unanimous mechanical failure is an
+        outage to surface, not a verdict to report.
+
+        `support_votes=1` runs the single call inline — byte-identical to step 1,
+        and the deterministic path scripted test clients rely on."""
+        n = self._support_votes
+        if n == 1:
+            return self._answer_support_vote(answer, evidence, context)
+        results: list[tuple[bool, list[str], list[str]] | None] = [None] * n
+        errors: list[Exception] = []
+
+        def _one(i: int) -> None:
+            try:
+                results[i] = self._answer_support_vote(answer, evidence, context)
+            except Exception as exc:  # noqa: BLE001 — re-raised below if unanimous
+                errors.append(exc)
+                results[i] = (False, [f"answer-support vote errored: {type(exc).__name__}"], [])
+
+        with ThreadPoolExecutor(max_workers=n) as pool:
+            list(pool.map(_one, range(n)))
+        if len(errors) == n:
+            raise errors[0]
+        votes = [r for r in results if r is not None]
+        fails = [v for v in votes if not v[0]]
+        advisories = _dedupe(a for _, _, adv in votes for a in adv)
+        if len(fails) * 2 > len(votes):
+            return (False, _dedupe(x for _, viol, _ in fails for x in viol), advisories)
+        return (True, [], advisories)
+
+    def _answer_support_vote(
+        self, answer: str, evidence: list, context: str = ""
+    ) -> tuple[bool, list[str], list[str]]:
+        """ONE answer-support vote — per-claim per ADR-21 (v1: ADR-13/19): does
         every factual claim in the answer — numeric or narrative — follow from the
         verified evidence? A model call, because it must understand derived figures
         (0.55→0.95 is +0.40) and prose paraphrase, neither of which survives an `==`.

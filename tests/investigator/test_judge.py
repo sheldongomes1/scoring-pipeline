@@ -10,6 +10,7 @@ Two layers:
 Run: `python tests/investigator/test_judge.py`
 """
 import sys
+import threading
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -67,24 +68,31 @@ class _Messages:
 
 
 class ScriptedClient:
-    """Generator OR judge fake. Returns scripted responses; repeats last if asked."""
+    """Generator OR judge fake. Returns scripted responses; repeats last if asked.
+
+    Thread-safe (ADR-21 step 2b): the answer-support head now fires 3 parallel
+    votes, so concurrent `_next` calls must hand out turns atomically. Vote
+    aggregation is order-insensitive (a majority over a multiset), so scripting
+    3 grounding turns in any order still yields a deterministic verdict."""
 
     def __init__(self, turns, repeat_last=False):
         self._turns = turns
         self._i = 0
         self._repeat = repeat_last
+        self._lock = threading.Lock()
         self.messages = _Messages(self)
         self.calls = []
 
     def _next(self, kwargs):
-        self.calls.append({**kwargs, "messages": list(kwargs.get("messages", []))})
-        if self._i < len(self._turns):
-            t = self._turns[self._i]
-            self._i += 1
-            return t
-        if self._repeat:
-            return self._turns[-1]
-        raise AssertionError("ScriptedClient ran out of scripted turns")
+        with self._lock:
+            self.calls.append({**kwargs, "messages": list(kwargs.get("messages", []))})
+            if self._i < len(self._turns):
+                t = self._turns[self._i]
+                self._i += 1
+                return t
+            if self._repeat:
+                return self._turns[-1]
+            raise AssertionError("ScriptedClient ran out of scripted turns")
 
 
 class ExplodingClient:
@@ -198,16 +206,17 @@ def _claims_pass(reason="ok"):
     """A v2 (ADR-21) per-claim answer-support payload that passes cleanly."""
     return {"claims": [{"claim": "the stated figure matches the evidence",
                         "classification": "supported", "basis": reason}],
-            "supported": True, "reasoning": reason}
+            "reasoning": reason}
 
 
 def test_grounded_evidence_gets_a_model_grade():
     """When integrity passes, the judge model runs TWICE: answer-support (ADR-13),
     then submit_judgment for C/O. Both turns scripted."""
     evidence = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
+    g = _Response("tool_use", [_ToolUseBlock("g1", "submit_grounding",
+        _claims_pass("0.95 is in the evidence"))])
     judge_client = ScriptedClient([
-        _Response("tool_use", [_ToolUseBlock("g1", "submit_grounding",
-            _claims_pass("0.95 is in the evidence"))]),
+        g, g, g,   # 3 answer-support votes (ADR-21 step 2b)
         _Response("tool_use", [_ToolUseBlock("j1", "submit_judgment",
             {"confirm": "confirmed", "open_questions": False, "reasoning": "recovered to 0.95"})]),
     ])
@@ -326,7 +335,7 @@ def test_answer_support_catches_numeric_hallucination_numbers_only():
     client = ScriptedClient([_Response("tool_use", [_ToolUseBlock("g1", "submit_grounding",
         {"claims": [{"claim": "answer says 0.55", "classification": "violation",
                      "basis": "evidence shows 0.95"}],
-         "supported": False, "reasoning": "fabricated figure"})])])
+         "reasoning": "fabricated figure"})])], repeat_last=True)
     judge = Judge(client=client, reverify=feature_history_fake)
     grounded, failed, det, _ = judge._check_grounding(evidence, "OCF/NI was 0.55 — collapse confirmed.")
     assert grounded is False
@@ -351,9 +360,9 @@ def test_judge_no_payload_fails_closed():
     """audit #10: a broken C/O grade (no tool payload) terminates INCONCLUSIVE with
     open_questions=False — it does NOT loop the budget away rubber-stamping."""
     ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
+    g = _Response("tool_use", [_ToolUseBlock("g", "submit_grounding", _claims_pass())])
     client = ScriptedClient([
-        _Response("tool_use", [_ToolUseBlock("g", "submit_grounding",
-            _claims_pass())]),                                                    # answer-support passes
+        g, g, g,                                                                  # answer-support votes pass
         _Response("end_turn", [_TextBlock("no tool call this time")]),            # C/O grade: no payload
     ])
     v = Judge(client=client, reverify=feature_history_fake).evaluate(
@@ -475,8 +484,9 @@ def test_submit_findings_tool_offered_alongside_data_tools():
 def _passing_support_client():
     """A judge client whose answer-support head always passes and whose C/O grade
     confirms — isolates the key_evidence citation check."""
+    g = _Response("tool_use", [_ToolUseBlock("g1", "submit_grounding", _claims_pass())])
     return ScriptedClient([
-        _Response("tool_use", [_ToolUseBlock("g1", "submit_grounding", _claims_pass())]),
+        g, g, g,
         _Response("tool_use", [_ToolUseBlock("j1", "submit_judgment",
             {"confirm": "confirmed", "open_questions": False, "reasoning": "ok"})]),
     ], repeat_last=True)
@@ -517,7 +527,9 @@ def test_key_evidence_valid_citation_passes_grounding():
 
 
 def _support_client(payload):
-    return ScriptedClient([_Response("tool_use", [_ToolUseBlock("g1", "submit_grounding", payload)])])
+    """Same payload for every vote — unanimous, so majority == single-vote verdict."""
+    return ScriptedClient([_Response("tool_use", [_ToolUseBlock("g1", "submit_grounding", payload)])],
+                          repeat_last=True)
 
 
 def test_violations_gate_the_run():
@@ -536,14 +548,15 @@ def test_advisories_do_not_gate_and_ride_the_verdict():
     """ADR-19: style notes on supported facts inform, never gate — they flow onto
     the JudgeVerdict for the UI's 'judge notes'."""
     ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
+    g = _Response("tool_use", [_ToolUseBlock("g1", "submit_grounding",
+        {"claims": [
+            {"claim": "recovered to 0.95", "classification": "supported", "basis": "0.95 fetched"},
+            {"claim": "hedged inference is labeled as inference",
+             "classification": "advisory", "basis": ""},
+         ],
+         "reasoning": "ok"})])
     client = ScriptedClient([
-        _Response("tool_use", [_ToolUseBlock("g1", "submit_grounding",
-            {"claims": [
-                {"claim": "recovered to 0.95", "classification": "supported", "basis": "0.95 fetched"},
-                {"claim": "hedged inference is labeled as inference",
-                 "classification": "advisory", "basis": ""},
-             ],
-             "supported": True, "reasoning": "ok"})]),
+        g, g, g,
         _Response("tool_use", [_ToolUseBlock("j1", "submit_judgment",
             {"confirm": "confirmed", "open_questions": False, "reasoning": "ok"})]),
     ])
@@ -606,6 +619,108 @@ def test_claim_missing_classification_gates_as_violation():
         assert any("unclassifiable claim" in f for f in failed)
 
 
+# --- ADR-21 step 2(b): 3 parallel votes, gate-level majority ------------------
+
+
+def _vote_turn(payload):
+    return _Response("tool_use", [_ToolUseBlock("g1", "submit_grounding", payload)])
+
+
+_VOTE_FAIL = {"claims": [{"claim": "borderline period wording",
+                          "classification": "violation", "basis": "wobble"}],
+              "reasoning": "x"}
+
+
+def test_one_wobble_vote_is_outvoted():
+    """The measured residual failure: one vote in three flips a borderline claim to
+    violation. Majority passes the run and the wobble's violation is dropped."""
+    ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
+    judge = Judge(client=ScriptedClient(
+        [_vote_turn(_VOTE_FAIL), _vote_turn(_claims_pass()), _vote_turn(_claims_pass())]),
+        reverify=feature_history_fake)
+    ok, violations, advisories = judge._check_answer_support("recovered to 0.95", ev)
+    assert ok is True
+    assert violations == []
+
+
+def test_majority_fail_gates_with_failing_votes_reasons():
+    ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
+    judge = Judge(client=ScriptedClient(
+        [_vote_turn(_VOTE_FAIL), _vote_turn(_VOTE_FAIL), _vote_turn(_claims_pass())]),
+        reverify=feature_history_fake)
+    ok, violations, advisories = judge._check_answer_support("it was 0.55", ev)
+    assert ok is False
+    assert violations == ["borderline period wording — wobble"]   # deduped across the 2 fail votes
+
+
+def test_advisories_union_across_all_votes():
+    ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
+    def _adv(text):
+        return {"claims": [
+            {"claim": "recovered to 0.95", "classification": "supported", "basis": "fetched"},
+            {"claim": text, "classification": "advisory", "basis": ""}], "reasoning": "ok"}
+    judge = Judge(client=ScriptedClient(
+        [_vote_turn(_adv("note A")), _vote_turn(_adv("note A")), _vote_turn(_adv("note B"))]),
+        reverify=feature_history_fake)
+    ok, violations, advisories = judge._check_answer_support("recovered to 0.95", ev)
+    assert ok is True
+    assert sorted(advisories) == ["note A", "note B"]             # deduped union, both surfaced
+
+
+def test_errored_vote_counts_as_fail_but_is_outvoted():
+    """A vote that raises is a FAIL vote (a vote we couldn't verify is not a pass) —
+    but two clean passes outvote it."""
+    ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
+
+    class FlakyClient:
+        def __init__(self):
+            self._lock = threading.Lock()
+            self._n = 0
+            self.messages = _Messages(self)
+
+        def _next(self, kwargs):
+            with self._lock:
+                self._n += 1
+                if self._n == 1:
+                    raise ConnectionError("transient")
+            return _vote_turn(_claims_pass())
+
+    judge = Judge(client=FlakyClient(), reverify=feature_history_fake)
+    ok, violations, advisories = judge._check_answer_support("recovered to 0.95", ev)
+    assert ok is True
+
+
+def test_all_votes_erroring_reraises_not_reports():
+    """Unanimous mechanical failure is an OUTAGE to surface, not a verdict —
+    re-raise instead of gating with a fabricated reason (billing lesson: an error
+    impersonating a verdict poisons both the gate and its measurement)."""
+    ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
+
+    class DeadClient:
+        class _M:
+            def create(self, **kwargs):
+                raise ConnectionError("api down")
+        messages = _M()
+
+    judge = Judge(client=DeadClient(), reverify=feature_history_fake)
+    try:
+        judge._check_answer_support("recovered to 0.95", ev)
+        raise AssertionError("expected ConnectionError to propagate")
+    except ConnectionError:
+        pass
+
+
+def test_single_vote_mode_stays_sequential():
+    """support_votes=1 must run inline (no threads) — the deterministic path for
+    sequential scripted clients and a step-1 comparison baseline."""
+    ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
+    judge = Judge(client=ScriptedClient([_vote_turn(_VOTE_FAIL)]),
+                  reverify=feature_history_fake, support_votes=1)
+    ok, violations, _ = judge._check_answer_support("it was 0.55", ev)
+    assert ok is False
+    assert violations == ["borderline period wording — wobble"]
+
+
 def test_truncated_head_is_named_not_graded():
     """A max_tokens-cut forced tool call can carry a PARTIAL claims list — grading
     from it would silently skip the tail claims (a false-trusted channel). The head
@@ -615,7 +730,7 @@ def test_truncated_head_is_named_not_graded():
     ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
     client = ScriptedClient([_Response("max_tokens", [_ToolUseBlock("g1", "submit_grounding",
         {"claims": [{"claim": "partial enumeration", "classification": "supported", "basis": "x"}],
-         "supported": True, "reasoning": "cut off"})])])
+         "reasoning": "cut off"})])], repeat_last=True)
     judge = Judge(client=client, reverify=feature_history_fake)
     grounded, failed, _, _ = judge._check_grounding(ev, "recovered to 0.95")
     assert grounded is False
@@ -624,8 +739,9 @@ def test_truncated_head_is_named_not_graded():
 
 def test_all_supported_claims_yield_empty_advisories():
     ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
+    g = _Response("tool_use", [_ToolUseBlock("g1", "submit_grounding", _claims_pass())])
     client = ScriptedClient([
-        _Response("tool_use", [_ToolUseBlock("g1", "submit_grounding", _claims_pass())]),
+        g, g, g,
         _Response("tool_use", [_ToolUseBlock("j1", "submit_judgment",
             {"confirm": "confirmed", "open_questions": False, "reasoning": "ok"})]),
     ])

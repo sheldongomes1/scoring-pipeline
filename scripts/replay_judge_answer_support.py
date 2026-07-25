@@ -112,7 +112,8 @@ def main() -> None:
         view = _judge_view(rec["evidence"])
         t0 = time.time()
         try:
-            ok, violations, advisories = judge._check_answer_support(answer, view)
+            ok, violations, advisories = judge._check_answer_support(
+                answer, view, context=rec.get("predicate") or "")
             return {
                 "trace_id": rec["trace_id"], "replay_index": k,
                 "ok": ok, "violations": violations, "advisories": advisories,

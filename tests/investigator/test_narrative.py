@@ -64,8 +64,12 @@ class ScriptedJudge:
         self.messages = _Messages(self)
         self._turn = _Response([_ToolUseBlock(
             "submit_grounding",
-            # ADR-19 two-tier schema: gating breaches go in `violations`.
-            {"supported": supported, "violations": list(unsupported), "advisories": [], "reasoning": "test"},
+            # ADR-21 per-claim schema: gating breaches are violation-classed claims.
+            {"claims": (
+                [{"claim": u, "classification": "violation", "basis": ""} for u in unsupported]
+                or [{"claim": "answer matches evidence", "classification": "supported", "basis": "test"}]
+             ),
+             "supported": supported, "reasoning": "test"},
         )])
 
 
@@ -214,7 +218,9 @@ def test_evaluate_full_path_with_mixed_evidence():
     judge = Judge(
         client=SeqJudge([
             _Response([_ToolUseBlock("submit_grounding",
-                {"supported": True, "violations": [], "advisories": [], "reasoning": "supported"})]),
+                {"claims": [{"claim": "answer matches evidence",
+                             "classification": "supported", "basis": "supported"}],
+                 "supported": True, "reasoning": "supported"})]),
             _Response([_ToolUseBlock("submit_judgment",
                 {"confirm": "confirmed", "open_questions": False, "reasoning": "recovered, timing temporary"})]),
         ]),

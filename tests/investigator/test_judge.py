@@ -194,13 +194,20 @@ def test_ungrounded_evidence_short_circuits_the_model():
     assert verdict.open_questions is None   # not consulted
 
 
+def _claims_pass(reason="ok"):
+    """A v2 (ADR-21) per-claim answer-support payload that passes cleanly."""
+    return {"claims": [{"claim": "the stated figure matches the evidence",
+                        "classification": "supported", "basis": reason}],
+            "supported": True, "reasoning": reason}
+
+
 def test_grounded_evidence_gets_a_model_grade():
     """When integrity passes, the judge model runs TWICE: answer-support (ADR-13),
     then submit_judgment for C/O. Both turns scripted."""
     evidence = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
     judge_client = ScriptedClient([
         _Response("tool_use", [_ToolUseBlock("g1", "submit_grounding",
-            {"supported": True, "violations": [], "advisories": [], "reasoning": "0.95 is in the evidence"})]),
+            _claims_pass("0.95 is in the evidence"))]),
         _Response("tool_use", [_ToolUseBlock("j1", "submit_judgment",
             {"confirm": "confirmed", "open_questions": False, "reasoning": "recovered to 0.95"})]),
     ])
@@ -317,8 +324,9 @@ def test_answer_support_catches_numeric_hallucination_numbers_only():
     a figure the generator never fetched is caught, not just narrative overreach."""
     evidence = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])  # FOUND 0.95
     client = ScriptedClient([_Response("tool_use", [_ToolUseBlock("g1", "submit_grounding",
-        {"supported": False, "violations": ["answer says 0.55 but evidence shows 0.95"],
-         "advisories": [], "reasoning": "fabricated figure"})])])
+        {"claims": [{"claim": "answer says 0.55", "classification": "violation",
+                     "basis": "evidence shows 0.95"}],
+         "supported": False, "reasoning": "fabricated figure"})])])
     judge = Judge(client=client, reverify=feature_history_fake)
     grounded, failed, det, _ = judge._check_grounding(evidence, "OCF/NI was 0.55 — collapse confirmed.")
     assert grounded is False
@@ -345,7 +353,7 @@ def test_judge_no_payload_fails_closed():
     ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
     client = ScriptedClient([
         _Response("tool_use", [_ToolUseBlock("g", "submit_grounding",
-            {"supported": True, "violations": [], "advisories": [], "reasoning": "ok"})]),  # answer-support passes
+            _claims_pass())]),                                                    # answer-support passes
         _Response("end_turn", [_TextBlock("no tool call this time")]),            # C/O grade: no payload
     ])
     v = Judge(client=client, reverify=feature_history_fake).evaluate(
@@ -468,8 +476,7 @@ def _passing_support_client():
     """A judge client whose answer-support head always passes and whose C/O grade
     confirms — isolates the key_evidence citation check."""
     return ScriptedClient([
-        _Response("tool_use", [_ToolUseBlock("g1", "submit_grounding",
-            {"supported": True, "violations": [], "advisories": [], "reasoning": "ok"})]),
+        _Response("tool_use", [_ToolUseBlock("g1", "submit_grounding", _claims_pass())]),
         _Response("tool_use", [_ToolUseBlock("j1", "submit_judgment",
             {"confirm": "confirmed", "open_questions": False, "reasoning": "ok"})]),
     ], repeat_last=True)
@@ -506,7 +513,7 @@ def test_key_evidence_valid_citation_passes_grounding():
     assert v.confirm is Confirm.CONFIRMED
 
 
-# --- ADR-19: two-tier answer-support (violations gate, advisories inform) ----
+# --- ADR-19/21: per-claim answer-support (violations gate, advisories inform) --
 
 
 def _support_client(payload):
@@ -516,7 +523,9 @@ def _support_client(payload):
 def test_violations_gate_the_run():
     ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
     judge = Judge(client=_support_client(
-        {"supported": False, "violations": ["figure 0.55 not in evidence"], "advisories": [], "reasoning": "x"}),
+        {"claims": [{"claim": "figure 0.55 not in evidence",
+                     "classification": "violation", "basis": ""}],
+         "supported": False, "reasoning": "x"}),
         reverify=feature_history_fake)
     grounded, failed, det, advisories = judge._check_grounding(ev, "it was 0.55")
     assert grounded is False and det is False
@@ -529,8 +538,12 @@ def test_advisories_do_not_gate_and_ride_the_verdict():
     ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
     client = ScriptedClient([
         _Response("tool_use", [_ToolUseBlock("g1", "submit_grounding",
-            {"supported": True, "violations": [],
-             "advisories": ["hedged inference is labeled as inference"], "reasoning": "ok"})]),
+            {"claims": [
+                {"claim": "recovered to 0.95", "classification": "supported", "basis": "0.95 fetched"},
+                {"claim": "hedged inference is labeled as inference",
+                 "classification": "advisory", "basis": ""},
+             ],
+             "supported": True, "reasoning": "ok"})]),
         _Response("tool_use", [_ToolUseBlock("j1", "submit_judgment",
             {"confirm": "confirmed", "open_questions": False, "reasoning": "ok"})]),
     ])
@@ -541,34 +554,64 @@ def test_advisories_do_not_gate_and_ride_the_verdict():
 
 
 def test_bool_list_disagreement_is_not_grounded():
-    """supported=true with a non-empty violations list is a judge inconsistency —
-    fail closed (ADR-19 gate condition: supported AND empty violations)."""
+    """supported=true alongside a violation-classed claim is a judge inconsistency —
+    fail closed (ADR-21 preserves ADR-19's cross-check; the gate is computed from
+    the claims, never taken from the bool)."""
     ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
     judge = Judge(client=_support_client(
-        {"supported": True, "violations": ["quote appears in no passage"], "advisories": [], "reasoning": "x"}),
+        {"claims": [{"claim": "quote appears in no passage",
+                     "classification": "violation", "basis": ""}],
+         "supported": True, "reasoning": "x"}),
         reverify=feature_history_fake)
     grounded, failed, _, _ = judge._check_grounding(ev, "management said 'we are doomed'")
     assert grounded is False
     assert failed == ["quote appears in no passage"]
 
 
-def test_missing_supported_or_violations_fails_closed():
-    """'required' is a hint (2026-07-14): a payload missing `supported` or missing
-    `violations` cannot be told apart from a dropped field — not grounded."""
+def test_missing_or_empty_claims_fails_closed():
+    """'required' is a hint (2026-07-14): a payload with no claims enumerated — key
+    missing OR empty list — cannot be told apart from an evasive/dropped
+    enumeration; ADR-21 fails it closed."""
     ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
-    for payload in ({"violations": [], "advisories": [], "reasoning": "x"},      # no supported
-                    {"supported": True, "advisories": [], "reasoning": "x"}):    # no violations
+    for payload in ({"supported": True, "reasoning": "x"},                # no claims key
+                    {"claims": [], "supported": True, "reasoning": "x"}): # empty claims
         judge = Judge(client=_support_client(payload), reverify=feature_history_fake)
         grounded, failed, _, _ = judge._check_grounding(ev, "recovered to 0.95")
         assert grounded is False
-        assert any("incomplete" in f for f in failed)
+        assert any("no claims enumerated" in f for f in failed)
 
 
-def test_missing_advisories_defaults_to_empty():
+def test_claim_missing_classification_gates_as_violation():
+    """ADR-21 per-claim fail-closed: a claim whose classification is missing or
+    unrecognized is a violation — never silently released."""
+    ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
+    for cls_kv in ({}, {"classification": "meh"}):
+        judge = Judge(client=_support_client(
+            {"claims": [{"claim": "unclassifiable claim", "basis": "", **cls_kv}],
+             "supported": False, "reasoning": "x"}),
+            reverify=feature_history_fake)
+        grounded, failed, _, _ = judge._check_grounding(ev, "recovered to 0.95")
+        assert grounded is False
+        assert any("unclassifiable claim" in f for f in failed)
+
+
+def test_missing_supported_bool_fails_closed():
+    """A clean claim list with the `supported` bool dropped is inconsistent by
+    ADR-21's cross-check — not grounded."""
+    ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
+    judge = Judge(client=_support_client(
+        {"claims": [{"claim": "recovered to 0.95", "classification": "supported", "basis": "fetched"}],
+         "reasoning": "x"}),
+        reverify=feature_history_fake)
+    grounded, failed, _, _ = judge._check_grounding(ev, "recovered to 0.95")
+    assert grounded is False
+    assert any("inconsistent" in f for f in failed)
+
+
+def test_all_supported_claims_yield_empty_advisories():
     ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
     client = ScriptedClient([
-        _Response("tool_use", [_ToolUseBlock("g1", "submit_grounding",
-            {"supported": True, "violations": [], "reasoning": "ok"})]),   # advisories omitted
+        _Response("tool_use", [_ToolUseBlock("g1", "submit_grounding", _claims_pass())]),
         _Response("tool_use", [_ToolUseBlock("j1", "submit_judgment",
             {"confirm": "confirmed", "open_questions": False, "reasoning": "ok"})]),
     ])

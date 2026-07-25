@@ -112,58 +112,92 @@ def _judgment_tool() -> dict:
 
 
 def _grounding_tool() -> dict:
-    """Strict schema for the ANSWER-SUPPORT head (ADR-13, two-tier per ADR-19).
+    """Strict schema for the ANSWER-SUPPORT head — v2, PER-CLAIM (ADR-21).
 
-    The judge's output is split into two tiers: `violations` GATE the run (a
-    genuine grounding breach), `advisories` never do (style/framing commentary on
-    supported facts). The single-bucket rubric let style rejections gate whole
-    runs (~8/11 measured rejections were style-class); the split releases only
-    items the judge affirmatively marks style-only — ambiguity fails closed into
-    `violations`, so the false-trusted rate cannot grow through the middle."""
+    v1 (ADR-19) asked for two holistic lists and measured bimodal: 9/18 fixed
+    transcripts flipped the gate on re-judging, violations arriving in clumps of
+    3-4 or not at all — the model samples a STANCE and confirmation-biases the
+    pass. v2 forces decomposition inside the same single call: enumerate the
+    answer's factual claims, classify EACH with a cited basis. The gate is
+    computed in code from the classifications (any `violation` fails; empty
+    enumeration fails closed), so the stochastic surface is per-claim judgments,
+    not one holistic verdict. Ambiguity still fails closed per claim."""
     return {
         "name": "submit_grounding",
         "description": (
             "Report whether the investigator's answer is supported by the verified "
-            "evidence. Classify every concern into exactly one of two tiers: "
-            "'violations' (grounding breaches that make the answer untrustworthy) or "
-            "'advisories' (style/framing notes on facts that ARE supported)."
+            "evidence, claim by claim. Enumerate EVERY factual claim the answer "
+            "makes, then classify each one: 'supported' (follows from the evidence, "
+            "including by correct arithmetic), 'violation' (a grounding breach that "
+            "makes the answer untrustworthy), or 'advisory' (a style/framing note "
+            "on a claim whose underlying facts ARE supported)."
         ),
         "strict": True,
         "input_schema": {
             "type": "object",
             "properties": {
+                "claims": {
+                    "type": "array",
+                    "description": (
+                        "Every factual claim in the answer, each classified independently. "
+                        "Do not skip claims; an answer's verdict sentence, rationale, and "
+                        "caveats all contain claims."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "claim": {
+                                "type": "string",
+                                "description": "The claim, restated in one short sentence.",
+                            },
+                            "classification": {
+                                "type": "string",
+                                "enum": ["supported", "violation", "advisory"],
+                                "description": (
+                                    "violation — ONLY these kinds of breach: a figure absent from "
+                                    "the evidence and not derivable from it by correct arithmetic; "
+                                    "a quote that appears in no passage; a claim that a passage or "
+                                    "shown value contradicts; a PERIOD ERROR (a comparison built on "
+                                    "a misidentified period — e.g. naming the wrong quarter as the "
+                                    "preceding one, or pairing periods the evidence dates disprove); "
+                                    "a misrepresentation of magnitude or period basis beyond mere "
+                                    "rounding (e.g. a quarterly figure presented as nine-month). "
+                                    "advisory — style/framing on supported facts: emphasis or "
+                                    "wording choices; hedged inference explicitly labeled as "
+                                    "inference; completeness suggestions; single-step arithmetic "
+                                    "identities (e.g. two ratios summing to ~1) and rounding "
+                                    "differences; loose period WORDING (e.g. 'prior quarter/year') "
+                                    "when the actual dates are stated and correctly labeled; "
+                                    "causal-attribution framing ('X explains/drives Y') when the "
+                                    "component facts are supported — causality is graded elsewhere; "
+                                    "restating the investigation's premise (it is externally given "
+                                    "context, not a claim requiring evidence support). "
+                                    "If you cannot confidently classify a concern as style-only, "
+                                    "use 'violation' (fail closed)."
+                                ),
+                            },
+                            "basis": {
+                                "type": "string",
+                                "description": (
+                                    "One sentence: the evidence item(s)/derivation that supports the "
+                                    "claim, or the specific breach for a violation/advisory."
+                                ),
+                            },
+                        },
+                        "required": ["claim", "classification", "basis"],
+                        "additionalProperties": False,
+                    },
+                },
                 "supported": {
                     "type": "boolean",
                     "description": (
-                        "True only if the answer contains NO violations — every figure and "
-                        "characterization is supported by (or correctly derived from) the evidence."
+                        "True only if NO claim above is classified 'violation'. Must agree "
+                        "with your own claim list."
                     ),
                 },
-                "violations": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "GATING breaches ONLY, of these kinds: a figure that is absent from the "
-                        "evidence and not derivable from it by correct arithmetic; a quote that "
-                        "appears in no passage; a claim that a passage contradicts; a misrepresentation "
-                        "of magnitude or period basis (e.g. presenting a quarterly figure as a "
-                        "nine-month one, or vice versa). If you cannot confidently classify a concern "
-                        "as style-only, it belongs HERE (fail closed). Empty if none."
-                    ),
-                },
-                "advisories": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "NON-gating notes ONLY: framing or emphasis choices about facts that ARE "
-                        "supported; hedged inference that is explicitly labeled as inference "
-                        "(e.g. 'consistent with, though not confirmed'); suggestions about "
-                        "completeness. These never make the answer untrustworthy. Empty if none."
-                    ),
-                },
-                "reasoning": {"type": "string", "description": "One or two sentences justifying the call."},
+                "reasoning": {"type": "string", "description": "One or two sentences justifying the overall call."},
             },
-            "required": ["supported", "violations", "advisories", "reasoning"],
+            "required": ["claims", "supported", "reasoning"],
             "additionalProperties": False,
         },
     }
@@ -326,7 +360,8 @@ class Judge:
         return failed
 
     def _check_grounding(
-        self, evidence: list, answer: str = "", key_evidence: list | None = None
+        self, evidence: list, answer: str = "", key_evidence: list | None = None,
+        context: str = "",
     ) -> tuple[bool, list[str], bool, list[str]]:
         """Grounding gate. Returns (grounded, failed_items, deterministic_failure,
         advisories).
@@ -367,42 +402,56 @@ class Judge:
         # evidence? Always runs (numbers AND prose) — the real anti-hallucination
         # gate. Skipped when integrity already failed (see docstring).
         if not deterministic_failure and answer.strip() and evidence:
-            supported, violations, advisories = self._check_answer_support(answer, evidence)
+            supported, violations, advisories = self._check_answer_support(answer, evidence, context)
             if not supported:
                 failed.extend(violations or ["answer claims not supported by evidence"])
 
         return (len(failed) == 0, failed, deterministic_failure, advisories)
 
-    def _check_answer_support(self, answer: str, evidence: list) -> tuple[bool, list[str], list[str]]:
-        """The ANSWER-SUPPORT head of G (ADR-13, two-tier per ADR-19): does every
-        factual claim in the answer — numeric or narrative — follow from the verified
-        evidence? A model call, because it must understand derived figures
+    def _check_answer_support(
+        self, answer: str, evidence: list, context: str = ""
+    ) -> tuple[bool, list[str], list[str]]:
+        """The ANSWER-SUPPORT head of G — per-claim per ADR-21 (v1: ADR-13/19): does
+        every factual claim in the answer — numeric or narrative — follow from the
+        verified evidence? A model call, because it must understand derived figures
         (0.55→0.95 is +0.40) and prose paraphrase, neither of which survives an `==`.
 
-        Returns (ok, violations, advisories). Gate condition (ADR-19): ok is True
-        only when the judge said `supported` AND returned an empty `violations`
-        list — a disagreement between the bool and the list is NOT grounded (fail
-        closed). Advisories are style/framing notes on supported facts and never
-        affect the gate."""
+        `context` is the investigation's predicate — externally GIVEN framing the
+        answer may restate without that restatement being a claim to verify (the
+        measured PANW failure: the head refuted the flag's own premise using
+        information the generator never asserted).
+
+        Returns (ok, violations, advisories) — contract unchanged from v1, so
+        loop/DTO/eval are untouched. Gate condition, computed HERE not by the
+        model: ok is True only when no claim is classified `violation`, the claim
+        list is non-empty, and the model's `supported` bool agrees — any
+        disagreement, empty enumeration, or missing field is NOT grounded (fail
+        closed). A claim with a missing/unknown classification is a violation
+        (fail closed, per-claim)."""
         view = json.dumps([self._view(e) for e in evidence])
         prompt = (
             "An investigator was given ONLY this verified evidence (numbers re-fetched "
             f"from source, passages verbatim):\n{view}\n\n"
-            f"It then wrote this answer:\n{answer}\n\n"
-            "Assess every factual claim in the answer against this evidence.\n"
-            "Report as a VIOLATION (gating) only these kinds of breach: a figure that "
-            "is absent from the evidence and not derivable from it by correct "
-            "arithmetic; a quote that appears in no passage; a claim that a passage "
-            "contradicts; a misrepresentation of magnitude or period basis.\n"
-            "Report as an ADVISORY (non-gating) style-only notes: framing or emphasis "
-            "of facts that ARE supported; hedged inference explicitly labeled as "
-            "inference; completeness suggestions.\n"
-            "If you cannot confidently classify a concern as style-only, put it in "
-            "violations (fail closed). Call submit_grounding."
+            + (
+                "The investigation's question/premise (externally given by the "
+                "anomaly-scoring system — the answer may restate it; that restatement "
+                f"is NOT a claim requiring evidence support):\n{context}\n\n"
+                if context.strip() else ""
+            )
+            + f"It then wrote this answer:\n{answer}\n\n"
+            "Enumerate EVERY factual claim in the answer (verdict, rationale, and "
+            "caveats all contain claims), then classify each one independently as "
+            "supported / violation / advisory per the tool schema's criteria, citing "
+            "a basis for each. Judge each claim on its own; do not let one claim's "
+            "classification color another's. If you cannot confidently classify a "
+            "concern as style-only, classify that claim as a violation (fail "
+            "closed). Call submit_grounding."
         )
         resp = self._client.messages.create(
             model=self._model,
-            max_tokens=1024,
+            # 2048, not 1024: per-claim output is materially longer, and a
+            # truncated forced tool call is a protocol event (2026-07-16 lesson).
+            max_tokens=2048,
             tools=[_grounding_tool()],
             tool_choice={"type": "tool", "name": "submit_grounding"},
             messages=[{"role": "user", "content": prompt}],
@@ -411,20 +460,40 @@ class Judge:
         if payload is None:
             return (False, ["semantic grounding check produced no verdict"], [])
         # Parse defensively: `required` in the tool schema is a hint to the model,
-        # not a runtime guarantee (2026-07-14 lesson) — fields go missing. ADR-19
-        # fail-closed rules: a missing `supported` OR a missing `violations` key is
-        # NOT grounded (we cannot tell a clean pass from a dropped field); a missing
-        # `advisories` is just an empty list (it never gates).
-        advisories = list(payload.get("advisories") or [])
-        if "supported" not in payload or "violations" not in payload:
-            return (False, ["answer-support verdict incomplete (missing supported/violations)"], advisories)
-        supported = bool(payload["supported"])
-        violations = list(payload["violations"] or [])
-        # Gate condition: supported AND no violations. A bool/list disagreement
-        # (supported=true with a non-empty violations list, or supported=false with
-        # an empty one) is a judge inconsistency → not grounded (fail closed).
-        ok = supported and not violations
-        return (ok, violations, advisories)
+        # not a runtime guarantee (2026-07-14 lesson). ADR-21 fail-closed rules:
+        # missing/empty `claims` is NOT grounded (an evasive or dropped enumeration
+        # cannot be told apart from a clean pass); a claim with a missing or
+        # unrecognized classification gates as a violation.
+        claims = payload.get("claims")
+        if not isinstance(claims, list) or not claims:
+            return (False, ["answer-support verdict incomplete (no claims enumerated)"], [])
+        violations: list[str] = []
+        advisories: list[str] = []
+        for c in claims:
+            if not isinstance(c, dict):
+                violations.append(f"malformed claim entry (fail closed): {c!r:.120}")
+                continue
+            text = str(c.get("claim") or "").strip() or "(unstated claim)"
+            basis = str(c.get("basis") or "").strip()
+            item = f"{text} — {basis}" if basis else text
+            cls = c.get("classification")
+            if cls == "supported":
+                continue
+            if cls == "advisory":
+                advisories.append(item)
+            else:
+                # 'violation', missing, or unknown → gate (fail closed per claim).
+                violations.append(item)
+        # The model's own `supported` bool must agree with its claim list — a
+        # disagreement in EITHER direction is a judge inconsistency (fail closed).
+        supported = payload.get("supported")
+        if "supported" not in payload or bool(supported) != (not violations):
+            return (
+                False,
+                violations or ["answer-support verdict inconsistent (supported bool disagrees with claims)"],
+                advisories,
+            )
+        return (not violations, violations, advisories)
 
     # --- C, O: the judge model ----------------------------------------------
 
@@ -498,7 +567,7 @@ class Judge:
         submit_findings cited — each must match an actually-fetched probe (identity
         + value), whose source truth the integrity head separately re-fetches."""
         grounded, failed, deterministic_failure, advisories = self._check_grounding(
-            evidence, answer, key_evidence
+            evidence, answer, key_evidence, context=predicate
         )
         if not grounded:
             # Short-circuit: C and O would be produced by the same untrustworthy

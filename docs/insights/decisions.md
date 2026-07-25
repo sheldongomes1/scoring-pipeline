@@ -1164,3 +1164,42 @@ as failure reasons. Residual risk owned: tier assignment is itself a model judgm
 mitigated by in-kind criteria in the rubric plus the fail-closed rule. `submit_grounding`
 schema changes (`violations`, `advisories`); parse defensively per 2026-07-14 ("required
 is a hint"): missing `violations` treated as not-supported, missing `advisories` as `[]`.
+
+## ADR-20: Out-of-band hard deadlines — the loop owns its clock
+
+**Date:** 2026-07-24
+**Status:** Accepted — implemented (`_call_with_deadline` in loop.py), regression-tested
+
+**Context:** The per-client SDK timeouts installed after the 21.4h FTNT hang
+(`Anthropic(timeout=120.0, max_retries=2)`) failed live: STX r3's turn-10
+`messages.create` ran 3,674.8s. An httpx `timeout` is a read timeout — it bounds the
+gap between received bytes, not total call duration — and timed-out attempts are
+retried. So both defenses to date were cooperative: `max_seconds` needs the turn to
+end; the client timeout needs the remote side to go silent. Neither is an upper bound.
+
+**Decision:** The loop enforces its own wall-clock deadline out-of-band. Every blocking
+call (generator `messages.create`, `registry.dispatch`, `judge.evaluate`) runs in a
+daemon worker thread; the loop `join`s with a deadline of the *remaining* `max_seconds`
+budget (floor 1s). On expiry the worker — and its socket — is abandoned (daemon threads
+cannot block interpreter exit) and the run terminates CAP_REACHED carrying the last
+verdict, identical in semantics to the between-turns guard. `max_seconds=None` runs
+calls inline: byte-identical behavior for tests and opted-out callers. SDK timeouts
+stay as the inner layer (they resolve the common case cheaply); the thread deadline is
+the outer guarantee.
+
+**Alternatives considered:** (a) Tune SDK/httpx timeout knobs harder — rejected: any
+in-band mechanism depends on bytes arriving or connections closing; the failure at hand
+is precisely a connection that does neither. (b) `signal.alarm`/SIGALRM — rejected:
+main-thread-only, composes badly with the service's threaded server and the eval's
+future thread pools. (c) Async + cancellation — rejected: correct in principle but
+forces async through the whole client-agnostic loop contract (ADR-1's sync, injectable
+`client`) for one guarantee a thread join provides. (d) Kill the worker thread —
+impossible in Python; abandonment is the honest version.
+
+**Consequences:** `max_seconds` is now a true upper bound (run ≤ budget + ~1s) on every
+code path — proven next run: FTNT, 21.4h once and 2,300s the eval before, capped at
+exactly 240.0s. Cost accepted: a pathological call leaks one parked daemon thread and
+its socket until the process exits; per-run that is bounded by the turn count, and the
+alternative (a hung eval) is strictly worse. The tracker still logs which operation ate
+the budget, so leaked-call diagnosis stays possible. One thread per call is spawned
+only when `max_seconds` is set (network runs), never in unit tests.

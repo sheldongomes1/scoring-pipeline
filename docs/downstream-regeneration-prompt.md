@@ -87,9 +87,9 @@ of that pipeline, never a parallel producer.
 ### Source-of-truth catalog
 
 Local CSVs (refreshed by the scoring pipeline):
-- `~/AIProjects/scoring-pipeline/output/quarterly_scores_detailed.csv`
+- `~/AIProjects/redink/scoring-pipeline/output/quarterly_scores_detailed.csv`
   — one row per (ticker, report_date) with full z-scores and drivers
-- `~/AIProjects/scoring-pipeline/output/top_anomaly_review_pack.csv`
+- `~/AIProjects/redink/scoring-pipeline/output/top_anomaly_review_pack.csv`
   — top anomalies with metadata
 
 GCS mirrors of the above:
@@ -111,7 +111,7 @@ BigQuery (project `qqq-anomaly-lab`, dataset `qqq_finance`):
 ```bash
 # All scoring fields for one filing (numbers)
 awk -F, 'NR==1 || ($1=="WBD" && $5=="2022-06-30")' \
-  ~/AIProjects/scoring-pipeline/output/quarterly_scores_detailed.csv
+  ~/AIProjects/redink/scoring-pipeline/output/quarterly_scores_detailed.csv
 
 # Narrative divergence + acknowledgment for one filing
 bq query --project_id=qqq-anomaly-lab --use_legacy_sql=false --format=prettyjson "
@@ -252,7 +252,7 @@ it impossible to ship an artifact without passing.
 
 ## 5 · Things to NOT do
 
-- Do not edit anything in `~/AIProjects/scoring-pipeline/`. The pipeline is correct.
+- Do not edit anything in `~/AIProjects/redink/scoring-pipeline/`. The pipeline is correct.
 - Do not generate new "evidence" by reading the SEC filings directly. The pipeline already did that and produced `narrative_divergence.cited_passage` and `anomaly_explanations.explanation_brief`. Use those.
 - Do not "approximate" or "stylize" numbers for impact. If 75.75 isn't impressive enough to anchor a post, the post needs a different filing, not a different number.
 - Do not assume earlier audits are still valid. Phase4 / Phase6 / "Five Gates" audits all passed v3 of the WBD post — they are insufficient. The new gate replaces them.

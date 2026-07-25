@@ -2,6 +2,31 @@
 
 > **CURRENT POSITION (update this block every session before closing):**
 >
+> - **Date:** 2026-07-25
+> - **Phase:** JUDGE CALIBRATION — churn measured, boundary tuning is next. The
+>   repeat-eval is COMPLETE: 18/18 runs (6 tickers × 3, ADR-18/19 path) in
+>   `output/investigator_eval_outputs_adr18_r3.json`. HEADLINE: **0/6 tickers
+>   stable** — every ticker flips terminal state on identical inputs (PANW A/A/R,
+>   INSM R/A/R, STX C/A/C, VRSK A/R/A, APP A/R/R, FTNT C/A/A); trusted 6/18.
+>   ADR-19's prediction ("INSM stops flipping") is REFUTED: the two-tier split
+>   works mechanically (advisories populate) but the violations gate still catches
+>   analysis-class items — observed: genuine catch (INSM r2 period misstatement),
+>   arithmetic over-reach (STX r2: debt≈1−equity rejected as "not verified"),
+>   premise punishment (PANW: "elevated leverage" is the flag's own cross-sectional
+>   premise, refuted with a YoY trend). ADR-20 SHIPPED: out-of-band hard deadlines
+>   (daemon-thread join on remaining max_seconds) after STX r3 ran a 3,674.8s call
+>   under `Anthropic(timeout=120)` — SDK timeouts bound byte-gaps, not duration;
+>   FTNT now caps at exactly 240.0s. Mid-eval credit exhaustion killed runs 10–18
+>   once (billing = availability dependency); `--only` subset-rerun flag landed,
+>   splice-by-trace_id repaired the file. NEXT (agreed): judge-rubric boundary
+>   calibration — arithmetic identities + flag-premise restatements move to
+>   advisories — testable OFFLINE against the 18 captured transcripts (judge-only
+>   calls, no new investigations); then repeat-eval to confirm churn drops; ONLY
+>   then ADR-16 Haiku A/B. Still open: deterministic UI layer (verdict card,
+>   number formatting, evidence collapsing, humanized step feed — mojibake fixed);
+>   STX/FTNT never converge at cap (cap tuning); interview (deferred);
+>   feature_keys.json upstream drift; EDGAR total_debt caveat.
+> - **[historical notes below, newest first]**
 > - **Date:** 2026-07-16
 > - **Phase:** OUTPUT LEGIBILITY + JUDGE CALIBRATION. Perf work shipped (ADR-15 batched
 >   reverify 124.9s→3.6s; ADR-17 SSE streaming verified through Cloud Run; deploy
@@ -24,7 +49,6 @@
 >   Haiku A/B. OPEN: interview (deferred); feature_keys.json upstream drift
 >   ([[known_gaps]]); EDGAR total_debt caveat; per-item `why_it_matters` deferred until
 >   judge calibration is proven.
-> - **[historical notes below, oldest first]**
 > - **Date:** 2026-07-14
 > - **Phase:** FULLY REAL & DEPLOYED. Loop + judge + disambiguation graph + tree
 >   (ADR-1…14, 93 tests). All 3 tools read GOLDEN SOURCES: feature_history→BigQuery,

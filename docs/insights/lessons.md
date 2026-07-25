@@ -501,3 +501,68 @@ the lesson body. Chronological order.
   token limit instantly became a protocol bug. A truncated sentence is a shrug; a
   truncated JSON tool call is a corrupted conversation. Structure changes what failure
   means."
+
+## 2026-07-24 — The SDK "hard timeout" was cooperative too: the FTNT lesson recursed
+- Situation: ADR-18 churn eval, STX r3. One `messages.create` call ran 3,674.8s under
+  `Anthropic(timeout=120.0, max_retries=2)` — the per-client bound installed as the fix
+  for the 21.4h FTNT hang. The run totaled 3,878s against a `max_seconds=240` budget.
+- What broke / what I assumed: I assumed an SDK `timeout` bounds a call's duration. It
+  bounds the *gap between received bytes* (httpx read timeout) — and timed-out attempts
+  are themselves retried — so a wedged-but-trickling connection resets the clock
+  indefinitely. Layer by layer: `max_seconds` was cooperative (checked between turns),
+  the client timeout was cooperative (needs the remote side to go silent). Each fix
+  delegated the deadline to a mechanism that still depended on someone else's behavior.
+- Lesson: a deadline you don't enforce with your own clock is a request, not a bound.
+  The only non-cooperative deadline available in-process is out-of-band: run the call in
+  a daemon worker thread, `join(remaining_budget)`, and on expiry abandon the thread and
+  take back control. Accept the honest cost (one parked thread per pathological call)
+  in exchange for the guarantee. Per-call deadline = *remaining* wall-clock budget, so
+  `max_seconds` becomes a true upper bound on every code path by construction.
+- Fix / rework: `_call_with_deadline()` in loop.py wrapping all three network call
+  sites (generator, tool dispatch, judge); expiry terminates CAP_REACHED carrying the
+  last verdict. Regression test: a hung fake client under `max_seconds=1` returns in
+  ~1s. Proof in the very next run: FTNT — 21.4h once, 2,300s last eval — capped at
+  exactly 240.0s.
+- Post angle: "We fixed our AI agent's 21-hour hang with a 'hard' SDK timeout. Then a
+  call ran 61 minutes under a 120-second timeout. Socket timeouts bound silence, not
+  duration — the only deadline that's real is one enforced by your own clock."
+
+## 2026-07-24 — An eval is only as durable as its billing
+- Situation: the 18-run churn eval died at run 10 of 18: API credit balance exhausted
+  mid-batch. VRSK/APP/FTNT × 3 all failed instantly with a 400; the harness recorded
+  them as error stubs and kept going (per-run try/except did its job).
+- Lesson: billing is an availability dependency, same class as a socket or a quota. A
+  long unattended batch should either pre-check spend headroom or assume mid-run
+  exhaustion is possible and be cheaply resumable. The `--only` ticker filter (subset
+  re-run against the same deterministic sample) plus splice-by-trace_id made the repair
+  a 25-minute top-up-and-rerun instead of a full 18-run redo.
+- Fix / rework: `--only` flag landed in the capture harness; auto-reload suggested on
+  the billing account.
+
+## 2026-07-25 — Repeats turned our trusted-rate into a dice roll: 0/6 tickers stable
+- Situation: first full repeat-eval through the ADR-18/19 path (6 tickers × 3 identical
+  runs). Every ticker flipped terminal state across repeats — PANW A/A/R, INSM R/A/R,
+  STX C/A/C, VRSK A/R/A, APP A/R/R, FTNT C/A/A. Trusted rate 6/18 (~33%), matching the
+  old 2/6 point-rate — which we now know was never a measurement, just one sample from a
+  high-variance distribution.
+- What broke / what I assumed: ADR-19's consequences block predicted "churn should drop
+  — INSM stops flipping." Refuted: the two-tier split works mechanically (advisories
+  populate and absorb style items) but the violations gate still catches analysis-class
+  items. Reading `ungrounded_items` across flips: one genuine catch (INSM r2 misstated
+  which quarter precedes 2025-03-31), one judge over-reach (STX r2: rejected
+  debt_to_assets ≈ 1 − equity_to_assets — arithmetic — as "not directly verified"), one
+  premise punishment (PANW r1/r2: refuted "elevated leverage" using a YoY decline when
+  "elevated" is the scoring layer's own cross-sectional z-score premise, a time-frame
+  confusion).
+- Lesson: a point metric on a stochastic system is unfalsifiable — you cannot tell a
+  regression from a reroll. Repeats are what turn "trusted-rate 33%" into a real claim.
+  And when a calibration fix ships with a testable prediction, the repeat-eval is what
+  holds it to account: ADR-19 passed its mechanism test and failed its outcome test.
+  The residual churn is boundary placement — arithmetic identities and restatements of
+  the flag's own premise must be advisories, not violations.
+- Fix / rework: pending — judge-rubric boundary calibration, testable offline against
+  the 18 captured transcripts (judge-only calls, no new investigations). ADR-16 Haiku
+  A/B stays blocked until a repeat-eval shows tickers stop flipping.
+- Post angle: "We ran our AI agent's eval three times on identical inputs. Every single
+  case flipped verdicts at least once. The scary part: any one of those runs, alone,
+  would have looked like a clean measurement."

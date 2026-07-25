@@ -553,11 +553,14 @@ def test_advisories_do_not_gate_and_ride_the_verdict():
     assert v.advisories == ("hedged inference is labeled as inference",)
 
 
-def test_bool_list_disagreement_is_not_grounded():
-    """supported=true alongside a violation-classed claim is a judge inconsistency —
-    fail closed (ADR-21 preserves ADR-19's cross-check; the gate is computed from
-    the claims, never taken from the bool)."""
+def test_stray_supported_bool_is_ignored_gate_is_claims_only():
+    """The summary bool was REMOVED from the schema (2026-07-25): it was a stance
+    channel — the model classified every claim supported/advisory then set
+    supported=false, and the old cross-check failed the run closed. The gate is
+    computed from the claims alone; a stray bool in either direction changes
+    nothing."""
     ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
+    # stray supported=True alongside a violation-classed claim → still gates
     judge = Judge(client=_support_client(
         {"claims": [{"claim": "quote appears in no passage",
                      "classification": "violation", "basis": ""}],
@@ -566,6 +569,14 @@ def test_bool_list_disagreement_is_not_grounded():
     grounded, failed, _, _ = judge._check_grounding(ev, "management said 'we are doomed'")
     assert grounded is False
     assert failed == ["quote appears in no passage"]
+    # stray supported=False alongside all-clean claims → still passes
+    judge = Judge(client=_support_client(
+        {"claims": [{"claim": "recovered to 0.95", "classification": "supported", "basis": "fetched"}],
+         "supported": False, "reasoning": "uneasy"}),
+        reverify=feature_history_fake)
+    grounded, failed, _, _ = judge._check_grounding(ev, "recovered to 0.95")
+    assert grounded is True
+    assert failed == []
 
 
 def test_missing_or_empty_claims_fails_closed():
@@ -593,19 +604,6 @@ def test_claim_missing_classification_gates_as_violation():
         grounded, failed, _, _ = judge._check_grounding(ev, "recovered to 0.95")
         assert grounded is False
         assert any("unclassifiable claim" in f for f in failed)
-
-
-def test_missing_supported_bool_fails_closed():
-    """A clean claim list with the `supported` bool dropped is inconsistent by
-    ADR-21's cross-check — not grounded."""
-    ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
-    judge = Judge(client=_support_client(
-        {"claims": [{"claim": "recovered to 0.95", "classification": "supported", "basis": "fetched"}],
-         "reasoning": "x"}),
-        reverify=feature_history_fake)
-    grounded, failed, _, _ = judge._check_grounding(ev, "recovered to 0.95")
-    assert grounded is False
-    assert any("inconsistent" in f for f in failed)
 
 
 def test_truncated_head_is_named_not_graded():

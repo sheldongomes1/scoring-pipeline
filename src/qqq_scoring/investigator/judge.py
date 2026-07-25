@@ -157,17 +157,21 @@ def _grounding_tool() -> dict:
                                     "violation — ONLY these kinds of breach: a figure absent from "
                                     "the evidence and not derivable from it by correct arithmetic; "
                                     "a quote that appears in no passage; a claim that a passage or "
-                                    "shown value contradicts; a PERIOD ERROR (a comparison built on "
-                                    "a misidentified period — e.g. naming the wrong quarter as the "
-                                    "preceding one, or pairing periods the evidence dates disprove); "
-                                    "a misrepresentation of magnitude or period basis beyond mere "
-                                    "rounding (e.g. a quarterly figure presented as nine-month). "
+                                    "shown value contradicts; a PERIOD ERROR — a comparison whose "
+                                    "STATED calendar relation the evidence dates contradict (calling "
+                                    "non-adjacent quarters 'sequential' or an 'immediately preceding "
+                                    "quarter', or a five-quarters-ago period 'prior year'), even when "
+                                    "the dates are printed alongside, because an analyst reads those "
+                                    "words as calendar relations — or pairing/misidentifying periods "
+                                    "the evidence disproves; a misrepresentation of magnitude or "
+                                    "period basis beyond mere rounding (e.g. a quarterly figure "
+                                    "presented as nine-month). "
                                     "advisory — style/framing on supported facts: emphasis or "
                                     "wording choices; hedged inference explicitly labeled as "
                                     "inference; completeness suggestions; single-step arithmetic "
                                     "identities (e.g. two ratios summing to ~1) and rounding "
-                                    "differences; loose period WORDING (e.g. 'prior quarter/year') "
-                                    "when the actual dates are stated and correctly labeled; "
+                                    "differences; period wording that accurately names the relation "
+                                    "('the preceding filed 10-Q', 'five quarters earlier'); "
                                     "causal-attribution framing ('X explains/drives Y') when the "
                                     "component facts are supported — causality is graded elsewhere; "
                                     "restating the investigation's premise (it is externally given "
@@ -188,16 +192,9 @@ def _grounding_tool() -> dict:
                         "additionalProperties": False,
                     },
                 },
-                "supported": {
-                    "type": "boolean",
-                    "description": (
-                        "True only if NO claim above is classified 'violation'. Must agree "
-                        "with your own claim list."
-                    ),
-                },
                 "reasoning": {"type": "string", "description": "One or two sentences justifying the overall call."},
             },
-            "required": ["claims", "supported", "reasoning"],
+            "required": ["claims", "reasoning"],
             "additionalProperties": False,
         },
     }
@@ -423,11 +420,11 @@ class Judge:
 
         Returns (ok, violations, advisories) — contract unchanged from v1, so
         loop/DTO/eval are untouched. Gate condition, computed HERE not by the
-        model: ok is True only when no claim is classified `violation`, the claim
-        list is non-empty, and the model's `supported` bool agrees — any
-        disagreement, empty enumeration, or missing field is NOT grounded (fail
-        closed). A claim with a missing/unknown classification is a violation
-        (fail closed, per-claim)."""
+        model: ok is True only when the claim list is non-empty and no claim is
+        classified `violation`. Empty/missing enumeration is NOT grounded; a
+        claim with a missing/unknown classification is a violation (fail closed,
+        per-claim). There is deliberately NO summary bool in the schema — it was
+        a stance channel (see the parse-site comment)."""
         view = json.dumps([self._view(e) for e in evidence])
         prompt = (
             "An investigator was given ONLY this verified evidence (numbers re-fetched "
@@ -440,12 +437,16 @@ class Judge:
             )
             + f"It then wrote this answer:\n{answer}\n\n"
             "Note on periods: the feature tool addresses periods POSITIONALLY over "
-            "FILED 10-Qs and may legitimately skip a fiscal-Q4 (10-K) period, so the "
-            "'preceding' period in evidence is not always calendar-adjacent. When the "
-            "answer states the actual dates correctly, loose adjacency wording "
-            "('immediately preceding quarter', 'prior year') is an ADVISORY, not a "
-            "period error; a period ERROR is pairing/identifying dates the evidence "
-            "disproves or that change what the comparison means.\n\n"
+            "FILED 10-Qs and may legitimately skip a fiscal-Q4 (10-K) period, so "
+            "consecutive evidence rows are not always calendar-adjacent. The DATA "
+            "pairing is legitimate; the WORDING must be honest about it. A claim "
+            "that asserts a calendar relation the shown dates contradict — calling "
+            "non-adjacent quarters 'sequential' or the 'immediately preceding "
+            "quarter', or a non-year-ago period 'prior year' — is a PERIOD ERROR "
+            "(violation) even when the dates are printed alongside, because an "
+            "analyst reads those words as calendar relations. Wording that "
+            "accurately names the relation ('the preceding filed 10-Q', 'five "
+            "quarters earlier') is not a period error.\n\n"
             "Enumerate EVERY factual claim in the answer (verdict, rationale, and "
             "caveats all contain claims), then classify each one independently as "
             "supported / violation / advisory per the tool schema's criteria, citing "
@@ -498,15 +499,11 @@ class Judge:
             else:
                 # 'violation', missing, or unknown → gate (fail closed per claim).
                 violations.append(item)
-        # The model's own `supported` bool must agree with its claim list — a
-        # disagreement in EITHER direction is a judge inconsistency (fail closed).
-        supported = payload.get("supported")
-        if "supported" not in payload or bool(supported) != (not violations):
-            return (
-                False,
-                violations or ["answer-support verdict inconsistent (supported bool disagrees with claims)"],
-                advisories,
-            )
+        # NO summary bool (removed 2026-07-25): the schema's `supported` field was a
+        # STANCE channel — measured on PANW r3, the model classified every claim
+        # supported/advisory then set supported=false anyway, and the cross-check
+        # failed the run closed. The gate is computed from the claims alone; a
+        # holistic bool adds no information the claims don't carry, only mood.
         return (not violations, violations, advisories)
 
     # --- C, O: the judge model ----------------------------------------------

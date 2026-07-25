@@ -35,13 +35,20 @@
 >   stable-passes 3→8; INSM r2 genuine period catch gates 3/3; STX arithmetic
 >   passes 3/3; PANW r3 "prior year" gates 3/3 — note the LIVE judge had trusted
 >   that run; the calibrated head is more correct than the production judgment it
->   replayed. All 6 residual churners flip on 0↔1 borderline claims. NEXT:
->   ladder step 2 — 3 parallel votes over the per-claim form; OPEN DESIGN Q:
->   claims don't align 1:1 across independent enumerations, so "majority per
->   claim" needs either fuzzy claim-matching or gate-level majority over
->   decomposed votes (proposed; user to ratify). Then: generator wording
->   discipline ("preceding filed 10-Q" phrasing) in its system prompt; live
->   repeat-eval; ONLY then ADR-16 Haiku A/B. Still open: deterministic UI layer
+>   replayed. All 6 residual churners flip on 0↔1 borderline claims. LADDER
+>   STEP 2b SHIPPED & MEASURED (user ratified gate-level majority):
+>   Judge(support_votes=3), parallel votes, majority gates, violations =
+>   union(failing votes), advisories = union(all votes), errored vote = fail
+>   vote / unanimous errors re-raise as an outage. FINAL TRAJECTORY on the
+>   fixed grid: **9/18 → 6/18 → 3/18 churn** — ≤3/18 prediction MET; step 3
+>   (full multi-call C) not justified by measurement, ladder COMPLETE. 15/18
+>   replay stable and stably MORE correct than live history (PANW r3 / APP r3
+>   live-trusted wording errors now gate; VRSK r3 / FTNT r2/r3 live
+>   over-rejections now pass). 40 judge tests. Follow-up flagged: advisory
+>   volume under union (10–30/transcript) — consider majority-advisories at
+>   the UI layer. NEXT: generator wording discipline ("preceding filed 10-Q"
+>   phrasing) in its system prompt; LIVE repeat-eval (trusted-rates will shift
+>   by design — the head judges differently now); ONLY then ADR-16 Haiku A/B. Still open: deterministic UI layer
 >   (verdict card, number formatting, evidence collapsing, humanized step feed —
 >   mojibake fixed); STX/FTNT never converge at cap (cap tuning); interview
 >   (deferred); feature_keys.json upstream drift; EDGAR total_debt caveat.

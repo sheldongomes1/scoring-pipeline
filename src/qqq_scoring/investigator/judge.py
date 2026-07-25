@@ -439,19 +439,28 @@ class Judge:
                 if context.strip() else ""
             )
             + f"It then wrote this answer:\n{answer}\n\n"
+            "Note on periods: the feature tool addresses periods POSITIONALLY over "
+            "FILED 10-Qs and may legitimately skip a fiscal-Q4 (10-K) period, so the "
+            "'preceding' period in evidence is not always calendar-adjacent. When the "
+            "answer states the actual dates correctly, loose adjacency wording "
+            "('immediately preceding quarter', 'prior year') is an ADVISORY, not a "
+            "period error; a period ERROR is pairing/identifying dates the evidence "
+            "disproves or that change what the comparison means.\n\n"
             "Enumerate EVERY factual claim in the answer (verdict, rationale, and "
             "caveats all contain claims), then classify each one independently as "
             "supported / violation / advisory per the tool schema's criteria, citing "
             "a basis for each. Judge each claim on its own; do not let one claim's "
-            "classification color another's. If you cannot confidently classify a "
-            "concern as style-only, classify that claim as a violation (fail "
-            "closed). Call submit_grounding."
+            "classification color another's. Keep each claim and basis to one short "
+            "sentence. If you cannot confidently classify a concern as style-only, "
+            "classify that claim as a violation (fail closed). Call submit_grounding."
         )
         resp = self._client.messages.create(
             model=self._model,
-            # 2048, not 1024: per-claim output is materially longer, and a
-            # truncated forced tool call is a protocol event (2026-07-16 lesson).
-            max_tokens=2048,
+            # 8192: the per-claim enumeration's length scales with the ANSWER's claim
+            # count. At 2048, 15/18 replayed transcripts truncated to an empty claims
+            # payload — deterministic truncation masquerading as a stable fail-closed
+            # verdict (the ADR-18 lesson, inside the judge).
+            max_tokens=8192,
             tools=[_grounding_tool()],
             tool_choice={"type": "tool", "name": "submit_grounding"},
             messages=[{"role": "user", "content": prompt}],
@@ -459,6 +468,11 @@ class Judge:
         payload = next((b.input for b in resp.content if getattr(b, "type", None) == "tool_use"), None)
         if payload is None:
             return (False, ["semantic grounding check produced no verdict"], [])
+        if getattr(resp, "stop_reason", None) == "max_tokens":
+            # A cut forced-tool call can surface as a PARTIAL claims list — grading
+            # from it would silently skip the tail claims (a false-trusted channel).
+            # Name the mechanical failure instead of letting it impersonate a verdict.
+            return (False, ["answer-support head truncated (max_tokens) — verdict unusable"], [])
         # Parse defensively: `required` in the tool schema is a hint to the model,
         # not a runtime guarantee (2026-07-14 lesson). ADR-21 fail-closed rules:
         # missing/empty `claims` is NOT grounded (an evasive or dropped enumeration

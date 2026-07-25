@@ -608,6 +608,22 @@ def test_missing_supported_bool_fails_closed():
     assert any("inconsistent" in f for f in failed)
 
 
+def test_truncated_head_is_named_not_graded():
+    """A max_tokens-cut forced tool call can carry a PARTIAL claims list — grading
+    from it would silently skip the tail claims (a false-trusted channel). The head
+    names the mechanical failure instead (2026-07-25: at 2048 tokens, 15/18 replayed
+    transcripts truncated to empty claims and impersonated stable fail-closed
+    verdicts)."""
+    ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
+    client = ScriptedClient([_Response("max_tokens", [_ToolUseBlock("g1", "submit_grounding",
+        {"claims": [{"claim": "partial enumeration", "classification": "supported", "basis": "x"}],
+         "supported": True, "reasoning": "cut off"})])])
+    judge = Judge(client=client, reverify=feature_history_fake)
+    grounded, failed, _, _ = judge._check_grounding(ev, "recovered to 0.95")
+    assert grounded is False
+    assert any("truncated" in f for f in failed)
+
+
 def test_all_supported_claims_yield_empty_advisories():
     ev = feature_history_fake("AAPL", date(2025, 6, 30), 1, ["ocf_to_net_income"])
     client = ScriptedClient([

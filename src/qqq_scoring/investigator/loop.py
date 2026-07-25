@@ -627,6 +627,8 @@ def _run_loop(
                     lambda: judge.evaluate(
                         predicate or task, _serialize_findings(findings), evidence,
                         key_evidence=findings["key_evidence"],
+                        given_context=task,   # flag summary + branch context — external
+                        #   givens the answer may cite/caveat (VRSK DEPI lesson)
                     ),
                     _remaining(),
                     tracker.last_operation or "judge.evaluate",

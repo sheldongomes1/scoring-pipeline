@@ -80,7 +80,7 @@ class FakeJudge:
     def __init__(self, verdict):
         self._v = verdict
 
-    def evaluate(self, predicate, answer, evidence, key_evidence=None):
+    def evaluate(self, predicate, answer, evidence, key_evidence=None, given_context=""):
         return self._v
 
 

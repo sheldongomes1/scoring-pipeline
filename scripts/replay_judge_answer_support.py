@@ -111,9 +111,20 @@ def main() -> None:
         answer = _answer_from(rec)
         view = _judge_view(rec["evidence"])
         t0 = time.time()
+        # Reconstruct the externally-given context the LIVE head sees: run_branch's
+        # task is flag summary + predicate ONLY (hypothesis/rationale stay in the
+        # proposer's world and must NOT be handed to the judge as givens — proposer
+        # figures are not system ground truth). The capture lacks the raw flag
+        # summary, but its DEPI-class figures ride in key_question, which the
+        # summary embeds.
+        context = "\n".join(filter(None, [
+            f"Flagged filing: {rec['ticker']} @ {rec['report_date']}.",
+            f"key_question: {rec['key_question']}" if rec.get("key_question") else "",
+            f"Investigate this specific hypothesis and resolve it:\n{rec.get('predicate') or ''}",
+        ]))
         try:
             ok, violations, advisories = judge._check_answer_support(
-                answer, view, context=rec.get("predicate") or "")
+                answer, view, context=context)
             return {
                 "trace_id": rec["trace_id"], "replay_index": k,
                 "ok": ok, "violations": violations, "advisories": advisories,

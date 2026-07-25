@@ -113,7 +113,7 @@ class FakeJudge:
         self._i = 0
         self.seen = []   # (answer, key_evidence) pairs — lets tests assert the wiring
 
-    def evaluate(self, predicate, answer, evidence, key_evidence=None):
+    def evaluate(self, predicate, answer, evidence, key_evidence=None, given_context=""):
         self.seen.append((answer, key_evidence))
         v = self._v[min(self._i, len(self._v) - 1)]
         self._i += 1

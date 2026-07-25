@@ -179,8 +179,14 @@ def _grounding_tool() -> dict:
                                     "identities (e.g. two ratios summing to ~1) and rounding "
                                     "differences; period wording that accurately names the relation "
                                     "('the preceding filed 10-Q', 'five quarters earlier'); "
-                                    "causal-attribution framing ('X explains/drives Y') when the "
-                                    "component facts are supported — causality is graded elsewhere; "
+                                    "a CAUSAL conclusion ('X explains/drives Y', 'A rather than B') "
+                                    "— INCLUDING the verdict itself when the question asks for a "
+                                    "causal determination — provided every component fact and "
+                                    "mechanism it cites is supported by the evidence; whether the "
+                                    "supported components SUFFICE to establish the causal claim is "
+                                    "graded by a separate head, never here. Gate a causal claim "
+                                    "only when a component is absent/contradicted or the cited "
+                                    "mechanism appears nowhere in the evidence; "
                                     "restating the investigation's premise (it is externally given "
                                     "context, not a claim requiring evidence support). "
                                     "If you cannot confidently classify a concern as style-only, "
@@ -494,9 +500,11 @@ class Judge:
             "An investigator was given ONLY this verified evidence (numbers re-fetched "
             f"from source, passages verbatim):\n{view}\n\n"
             + (
-                "The investigation's question/premise (externally given by the "
-                "anomaly-scoring system — the answer may restate it; that restatement "
-                f"is NOT a claim requiring evidence support):\n{context}\n\n"
+                "The investigation's TASK and flag context (externally given by the "
+                "anomaly-scoring system, not produced by the investigator — figures, "
+                "signals, and premises stated here may be restated or caveated by the "
+                "answer WITHOUT being claims requiring evidence support; verify only "
+                f"what the answer asserts beyond this given context):\n{context}\n\n"
                 if context.strip() else ""
             )
             + f"It then wrote this answer:\n{answer}\n\n"
@@ -511,6 +519,16 @@ class Judge:
             "analyst reads those words as calendar relations. Wording that "
             "accurately names the relation ('the preceding filed 10-Q', 'five "
             "quarters earlier') is not a period error.\n\n"
+            "Note on causal conclusions: when the investigation question itself asks "
+            "for a causal determination ('is X driven by A rather than B?'), a causal "
+            "answer is the expected deliverable, not an overreach. Your job on a "
+            "causal claim — including the verdict — is to check its COMPONENTS: every "
+            "figure, comparison, and cited mechanism must be supported by the "
+            "evidence. If the components hold, the causal claim is at most an "
+            "advisory; whether the components SUFFICE to establish causation is "
+            "graded by a separate reviewer, never by you. Gate a causal claim only "
+            "when a component is absent or contradicted, or the mechanism it cites "
+            "appears nowhere in the evidence.\n\n"
             "Enumerate EVERY factual claim in the answer (verdict, rationale, and "
             "caveats all contain claims), then classify each one independently as "
             "supported / violation / advisory per the tool schema's criteria, citing "
@@ -635,6 +653,10 @@ class Judge:
         answer: str,
         evidence: list[FeatureResult],
         key_evidence: list | None = None,
+        given_context: str = "",   # the full TASK (flag summary + branch context):
+        #   externally-given figures/signals the answer may reference or caveat
+        #   without them being claims to verify (VRSK DEPI lesson — the flag's own
+        #   Beneish driver was gated as a fabricated figure).
     ) -> JudgeVerdict:
         """Grade a proposed conclusion. Grounding gates everything (ADR-1).
 
@@ -642,7 +664,7 @@ class Judge:
         submit_findings cited — each must match an actually-fetched probe (identity
         + value), whose source truth the integrity head separately re-fetches."""
         grounded, failed, deterministic_failure, advisories = self._check_grounding(
-            evidence, answer, key_evidence, context=predicate
+            evidence, answer, key_evidence, context=(given_context or predicate)
         )
         if not grounded:
             # Short-circuit: C and O would be produced by the same untrustworthy

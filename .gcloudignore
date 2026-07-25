@@ -1,0 +1,16 @@
+.git/
+**/__pycache__/
+*.pyc
+tests/
+docs/
+analysis/
+logs/
+notebooks/
+scripts/
+explanations/
+output/*
+!output/feature_keys.json
+output_gcs_archive/
+*.csv
+*.png
+query-disambiguation.md

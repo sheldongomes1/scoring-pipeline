@@ -8,6 +8,13 @@ from google.cloud import storage
 
 METADATA_KEYS = {"target_year", "target_period_end", "target_form", "years_covered", "feature_count"}
 
+# Keys inside engineered_anomaly_features that are not scoreable features
+_EAF_NON_FEATURE_KEYS = {"_feature_flags"}
+
+# Prefix used for Beneish raw input columns — excluded from z-scoring
+BENEISH_CURR_PREFIX = "b_curr_"
+BENEISH_PRIOR_PREFIX = "b_prior_"
+
 
 def _safe_col(name: str) -> str:
     name = name.lower()
@@ -86,10 +93,22 @@ def load_gcs_bundles(
             "filing_url": data.get("selected_filing_url"),
         }
 
+        # Engineered anomaly features (scoreable)
         for k, v in eaf.items():
-            if k in METADATA_KEYS:
+            if k in METADATA_KEYS or k in _EAF_NON_FEATURE_KEYS:
                 continue
             record[_safe_col(k)] = v
+
+        # Feature flags from guardrails — stored as JSON string, not scored
+        flags = eaf.get("_feature_flags", {})
+        record["feature_flags_json"] = json.dumps(flags) if flags else None
+
+        # Beneish raw inputs — flattened with prefixes, not scored directly
+        brf = data.get("beneish_raw_features", {})
+        for field, val in brf.get("current", {}).items():
+            record[f"{BENEISH_CURR_PREFIX}{field}"] = val
+        for field, val in brf.get("prior_year_same_period", {}).items():
+            record[f"{BENEISH_PRIOR_PREFIX}{field}"] = val
 
         records.append(record)
 

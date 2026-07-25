@@ -1,5 +1,29 @@
 # CLAUDE.md — QQQ Anomaly Scoring Pipeline
 
+## Active workstream (read this first on session open)
+
+We are building the **Agentic Investigator** — an agentic AI loop that turns the
+`analyst_actions` "what would escalate / go check X" suggestions into an
+investigation the system runs itself, surfaced as a NotebookLM-style
+disambiguation graph the user can steer. This work is run in **Socratic build
+(tutor) mode** — learn the *why*, defend every architectural choice before code.
+
+On session open, READ these to resume exactly where we left off:
+- `docs/agentic-investigation/roadmap.md` — **CURRENT POSITION** block at the top
+- `docs/agentic-investigation/mission.md` — the goals and the fused idea
+- `docs/agentic-investigation/decisions.md` — ADR log (open checkpoints = PENDING)
+- `docs/agentic-investigation/lessons.md` — portfolio fuel
+
+Maintenance rule: append to `decisions.md`/`lessons.md` the moment a decision or
+lesson surfaces; update the roadmap CURRENT POSITION block before any session ends.
+
+## Permissions
+
+- **Read:** Pre-approved for all files in this directory and subdirectories. No confirmation needed before reading any file.
+- **Write:** Always ask for confirmation before creating, editing, or deleting any file.
+
+---
+
 ## Who you are working with
 
 Sheldon is building this product primarily to learn — to understand how real data pipelines, ML systems, and production-grade software are designed and built. He is not just looking for working code. He wants to understand **why** decisions are made, **what** the tradeoffs are, and **where** the work is heading.
@@ -12,6 +36,37 @@ Sheldon is building this product primarily to learn — to understand how real d
 - **Give context about what is proposed.** When suggesting an approach, explain: what problem it solves, how it fits the architecture, what a world-class version of this looks like, and what corners are being cut (if any) for now.
 - **Lead toward a world-class product.** At every step, ask: is this how a senior engineer at a top company would build it? If not, say so and explain what the gap is. Hold a high bar even when building quickly.
 - **Teach the why.** Sheldon learns by doing. When patterns, conventions, or tradeoffs come up, explain them. Use analogies to make abstract concepts concrete. Never just drop code without context.
+- **Reason as a CFA and equity analyst first.** Before writing or reviewing any scoring logic, feature engineering, or peer grouping, reason through it as a Chartered Financial Analyst and experienced equity analyst would. Ask: does this reflect how real analysts compare companies? Are we aligning by economic period, not just filing mechanics? Would a sell-side analyst accept this peer group? Flag any methodology that would not survive scrutiny from a professional investor.
+
+---
+
+## Pipeline orchestrator — MANDATORY rule
+
+**`scripts/orchestrate.py` is the single entry point for the full pipeline.**
+
+It is a DAG-aware orchestrator that runs independent steps in parallel. The current execution order is:
+
+```
+Phase 1: Step 1 → Step 2           (sequential)
+Phase 2: Step 4                    (narrative divergence — depends on Step 2)
+Phase 3: Step 5                    (conviction scores — depends on Step 4)
+Phase 4: Step 3                    (analyst briefs for all tiered filings — depends on Step 5)
+Phase 5: Step 6 ∥ Step 7           (parallel — both depend on Step 3)
+Phase 6: Step 8                    (analyst actions — depends on Step 6)
+```
+
+**Every time a new element is added to the pipeline — a new script, a new scoring module, a new LLM layer, a new BQ output table — it MUST be either:**
+1. **Added as a new step** in the `STEPS` list in `orchestrate.py` with the correct `num`, `name`, `script`, `args`, `depends_on`, and `note`
+2. **Or incorporated into an existing step** if it is a sub-task of an existing script (e.g. a new column added to an existing output)
+
+**When adding a new step:**
+- Set `depends_on` to the step numbers whose BQ output tables this step reads from
+- Place the step number so it reflects the correct execution phase
+- If the new step is independent of other steps at the same level, it runs in parallel automatically — no extra code needed
+- Update the execution order comment at the top of `orchestrate.py` if the phase structure changes
+- `run_pipeline.py` (the old sequential runner) is kept for reference but `orchestrate.py` is the authoritative entry point
+
+Do not add pipeline scripts without updating `orchestrate.py`.
 
 ---
 
@@ -126,18 +181,21 @@ For each ticker, compute z-scores relative to that ticker's own historical distr
 - `z = (value - median) / (IQR / 1.35)` — the 1.35 factor normalises IQR to approximate std for normal distributions
 - Result: how unusual is this period for *this company* compared to its own history
 
-### Step 4 — Peer-relative z-scores by report_date
+### Step 4 — Peer-relative z-scores by calendar quarter and sector
 
-For each feature, compute z-scores relative to all companies reporting in the same period (`report_date`):
+For each feature, compute z-scores relative to peer companies in the same economic period and industry:
+- Group by `calendar_quarter` (derived from `report_date`: Q1=Jan–Mar, Q2=Apr–Jun, Q3=Jul–Sep, Q4=Oct–Dec) **and** `gics_sector`
+- Companies with different fiscal year-ends but overlapping economic periods are compared as peers (e.g. Jan 31 and Mar 31 quarter-ends both fall in Q1)
+- Fallback: when a sector group has fewer than 5 companies, falls back to calendar-quarter-only (universe-wide) grouping to preserve coverage for small sectors
 - Again use median/IQR (robust)
-- Result: how unusual is this company compared to its peers *at the same point in time*
+- Result: how unusual is this company compared to its sector peers *at the same point in time*
 - This catches sector-wide anomalies that self-history alone would miss
 
 ### Step 5 — Combine the two views
 
 Blend self-history z-scores and peer-relative z-scores:
 - Simple average of the two z-score sets per feature
-- Guardrail: **clip combined z-scores globally** (e.g. ±5) to prevent any single unstable ratio from dominating the model
+- Guardrail: **clip combined z-scores globally** (±8) to prevent any single unstable ratio from dominating the model
 
 ### Step 6 — Compute robust Mahalanobis-style distance
 
@@ -165,30 +223,40 @@ After writing both CSVs locally, **upload them to GCS** using `src/qqq_scoring/u
 
 ---
 
-## Scripts to build
+## Repo structure
 
 ```
 scoring-pipeline/
 ├── CLAUDE.md                        ← this file
 ├── pyproject.toml                   ← dependencies
+├── docs/
+│   └── task_definition.md           ← full pipeline documentation
 ├── scripts/
-│   ├── flatten_gcs.py               ← Step 0: GCS → flat feature table
-│   ├── discover_feature_keys.py     ← identify which features to score on
-│   ├── score_quarterly_anomalies.py ← Steps 1–7: full scorer
-│   └── build_review_pack.py         ← top anomalies review pack
+│   ├── orchestrate.py               ← PRIMARY ENTRY POINT — DAG orchestrator
+│   ├── run_pipeline.py              ← sequential runner (reference only)
+│   ├── flatten_bq.py                ← Step 1: BQ → period_features.json
+│   ├── score_quarterly_anomalies.py ← Step 2: anomaly scoring + Beneish
+│   ├── build_master_output.py       ← Step 6: BQ view + review pack
+│   └── build_trend_table.py         ← Step 7: per-ticker time-series table
+├── explanations/
+│   ├── generate_explanations.py     ← Step 3: LLM analyst briefs
+│   ├── score_narrative_divergence.py← Step 4: MD&A divergence
+│   ├── compute_conviction.py        ← Step 5: three-pillar conviction score
+│   ├── prompt_template.py           ← prompt builder for analyst briefs
+│   └── divergence_prompt.py         ← prompt builder for divergence analysis
 ├── output/                          ← generated outputs (gitignored)
 │   ├── feature_keys.json
 │   ├── period_features.json
-│   ├── quarterly_scores_detailed.csv
-│   └── top_anomaly_review_pack.csv
+│   └── quarterly_scores_detailed.csv
 └── src/
     └── qqq_scoring/
         ├── __init__.py
-        ├── flatten.py               ← GCS reading + flattening logic
+        ├── flatten.py               ← BQ reading + flattening logic
         ├── features.py              ← feature selection + winsorizing
         ├── scorer.py                ← z-score computation + Mahalanobis
-        ├── review.py                ← review pack generation
-        └── upload.py                ← GCS output upload utility
+        ├── beneish.py               ← Beneish M-Score computation
+        ├── reference.py             ← GICS sector mapping loader
+        └── upload.py                ← GCS/BQ upload utilities
 ```
 
 ---
@@ -196,28 +264,17 @@ scoring-pipeline/
 ## How to run
 
 ```bash
-# Prerequisites
-export SEC_API_EMAIL=sheldon.gomes@gmail.com
-gcloud auth application-default login  # if not already authenticated
+# Full pipeline (recommended)
+python scripts/orchestrate.py
 
-# Step 0: flatten GCS bundles to local feature table
-python scripts/flatten_gcs.py \
-  --gcs-bucket qqq-anomaly-raw-sg \
-  --gcs-prefix qqq \
-  --form-type 10-Q \
-  --output-dir output
+# Resume from a specific step
+python scripts/orchestrate.py --from-step 3
 
-# Steps 1–7: score all quarterly filings
-python scripts/score_quarterly_anomalies.py \
-  --feature-keys output/feature_keys.json \
-  --period-features output/period_features.json \
-  --output-dir output
+# Run specific steps only
+python scripts/orchestrate.py --steps 5,6,7
 
-# Build review pack and upload outputs to GCS
-python scripts/build_review_pack.py \
-  --scores output/quarterly_scores_detailed.csv \
-  --output-dir output \
-  --upload-gcs
+# Preview without executing
+python scripts/orchestrate.py --dry-run
 ```
 
 ---
@@ -225,18 +282,10 @@ python scripts/build_review_pack.py \
 ## Dependencies
 
 - `google-cloud-storage` — read from GCS
-- `google-cloud-bigquery` — optional, for BigQuery load/query
+- `google-cloud-bigquery` — BigQuery load/query
+- `anthropic` — Claude API for LLM explanation layers
 - `pandas`, `numpy`, `scikit-learn` — feature processing and scoring
 - `pyarrow` — for BigQuery/parquet I/O
-
----
-
-## First steps when opening this project
-
-1. **Check if `score_quarterly_anomalies.py` exists in Cloud Shell** — if the user has it, paste the contents into `scripts/score_quarterly_anomalies.py` and adapt it to read from GCS instead of BigQuery
-2. **If not available**, reconstruct it from scratch following the 7-step methodology above
-3. Start with `flatten_gcs.py` — get the feature table working first, inspect the data, then build the scorer on top of it
-4. Run on a small subset first: `--max-tickers 5` or `--tickers AAPL,MSFT,NVDA`
 
 ---
 

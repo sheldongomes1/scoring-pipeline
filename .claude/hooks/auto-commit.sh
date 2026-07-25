@@ -3,7 +3,7 @@
 # Commits staged changes, pushes branch, and creates a PR if none exists.
 set -euo pipefail
 
-REPO=/home/sheldongomes/AIProjects/scoring-pipeline
+REPO=/home/sheldongomes/AIProjects/redink/scoring-pipeline
 cd "$REPO"
 
 # Exit silently if nothing is staged

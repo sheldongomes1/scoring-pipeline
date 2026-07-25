@@ -1,0 +1,348 @@
+# Roadmap — Agentic Investigator
+
+> **CURRENT POSITION (update this block every session before closing):**
+>
+> - **Date:** 2026-07-25
+> - **Phase:** JUDGE CALIBRATION — churn measured, boundary tuning is next. The
+>   repeat-eval is COMPLETE: 18/18 runs (6 tickers × 3, ADR-18/19 path) in
+>   `output/investigator_eval_outputs_adr18_r3.json`. HEADLINE: **0/6 tickers
+>   stable** — every ticker flips terminal state on identical inputs (PANW A/A/R,
+>   INSM R/A/R, STX C/A/C, VRSK A/R/A, APP A/R/R, FTNT C/A/A); trusted 6/18.
+>   ADR-19's prediction ("INSM stops flipping") is REFUTED: the two-tier split
+>   works mechanically (advisories populate) but the violations gate still catches
+>   analysis-class items — observed: genuine catch (INSM r2 period misstatement),
+>   arithmetic over-reach (STX r2: debt≈1−equity rejected as "not verified"),
+>   premise punishment (PANW: "elevated leverage" is the flag's own cross-sectional
+>   premise, refuted with a YoY trend). ADR-20 SHIPPED: out-of-band hard deadlines
+>   (daemon-thread join on remaining max_seconds) after STX r3 ran a 3,674.8s call
+>   under `Anthropic(timeout=120)` — SDK timeouts bound byte-gaps, not duration;
+>   FTNT now caps at exactly 240.0s. Mid-eval credit exhaustion killed runs 10–18
+>   once (billing = availability dependency); `--only` subset-rerun flag landed,
+>   splice-by-trace_id repaired the file. ADR-21 SHIPPED & MEASURED (same day,
+>   3 iterations on the new offline replay harness
+>   `scripts/replay_judge_answer_support.py`): per-claim answer-support (C-lite) —
+>   `submit_grounding` v2 enumerates+classifies every claim, gate computed in
+>   code; predicate passed as external context (premise blind spot closed);
+>   iteration fixes: max_tokens 2048→8192 (15/18 transcripts had truncated to
+>   EMPTY claims — deterministic truncation impersonating "stable" verdicts),
+>   truncation now a NAMED failure; summary `supported` bool REMOVED (stance
+>   leaked through it — PANW r3 classified all claims clean then said
+>   supported=false 3/3); period-wording RULING (user, option b): stated calendar
+>   relations the dates contradict ("sequential"/"prior year") GATE even with
+>   dates printed — precise wording ("preceding filed 10-Q") is the generator's
+>   job. FINAL step-1 numbers (clean grid, 0 errors/truncations): pure judge
+>   churn 9/18 → 6/18 (≤3/18 prediction MISSED → ladder step 2 triggered);
+>   stable-passes 3→8; INSM r2 genuine period catch gates 3/3; STX arithmetic
+>   passes 3/3; PANW r3 "prior year" gates 3/3 — note the LIVE judge had trusted
+>   that run; the calibrated head is more correct than the production judgment it
+>   replayed. All 6 residual churners flip on 0↔1 borderline claims. LADDER
+>   STEP 2b SHIPPED & MEASURED (user ratified gate-level majority):
+>   Judge(support_votes=3), parallel votes, majority gates, violations =
+>   union(failing votes), advisories = union(all votes), errored vote = fail
+>   vote / unanimous errors re-raise as an outage. FINAL TRAJECTORY on the
+>   fixed grid: **9/18 → 6/18 → 3/18 churn** — ≤3/18 prediction MET; step 3
+>   (full multi-call C) not justified by measurement, ladder COMPLETE. 15/18
+>   replay stable and stably MORE correct than live history (PANW r3 / APP r3
+>   live-trusted wording errors now gate; VRSK r3 / FTNT r2/r3 live
+>   over-rejections now pass). 40 judge tests. Follow-up flagged: advisory
+>   volume under union (10–30/transcript) — consider majority-advisories at
+>   the UI layer. NEXT: generator wording discipline ("preceding filed 10-Q"
+>   phrasing) in its system prompt; LIVE repeat-eval (trusted-rates will shift
+>   by design — the head judges differently now); ONLY then ADR-16 Haiku A/B. Still open: deterministic UI layer
+>   (verdict card, number formatting, evidence collapsing, humanized step feed —
+>   mojibake fixed); STX/FTNT never converge at cap (cap tuning); interview
+>   (deferred); feature_keys.json upstream drift; EDGAR total_debt caveat.
+> - **[historical notes below, newest first]**
+> - **Date:** 2026-07-16
+> - **Phase:** OUTPUT LEGIBILITY + JUDGE CALIBRATION. Perf work shipped (ADR-15 batched
+>   reverify 124.9s→3.6s; ADR-17 SSE streaming verified through Cloud Run; deploy
+>   relocated into the real qqq-anomaly-lab service behind tryredink.dev; BQ balance
+>   sheet backend). Post-fix 6-ticker eval re-run DONE
+>   (`output/investigator_eval_outputs_postfix.json`; pre-fix baseline preserved in
+>   `_real.json`; capture now records `judge_reasoning`/`ungrounded_items`). Findings:
+>   trusted-rate still 2/6 — NOT a generator problem: only ~3/11 judge rejections were
+>   genuine; the rest punish hedged inference, demand re-verification of
+>   INTEGRITY-checked values, or flag the generator describing its own tools (ADR-5
+>   blind spot). INSM churns trusted↔untrusted on identical inputs → n=6 A/B gate for
+>   ADR-16 is noise. FTNT ran 21.4h under a 240s guard (cooperative timeout ≠ socket
+>   deadline). DECIDED, implementation pending: ADR-18 (structured `submit_findings`
+>   final turn — verdict_sentence/rationale/key_evidence/caveats, every field verified,
+>   verifier by field type) + ADR-19 (two-tier answer-support: violations gate,
+>   advisories inform, ambiguity fails closed). NEXT (agreed order): implement ADR-18+19
+>   in judge/loop/service; per-client hard timeouts (FTNT fix); deterministic UI layer
+>   (verdict card, number formatting, evidence collapsing, mojibake cp1252 bug,
+>   humanized step feed); re-run eval WITH REPEATS to measure churn; only then ADR-16
+>   Haiku A/B. OPEN: interview (deferred); feature_keys.json upstream drift
+>   ([[known_gaps]]); EDGAR total_debt caveat; per-item `why_it_matters` deferred until
+>   judge calibration is proven.
+> - **Date:** 2026-07-14
+> - **Phase:** FULLY REAL & DEPLOYED. Loop + judge + disambiguation graph + tree
+>   (ADR-1…14, 93 tests). All 3 tools read GOLDEN SOURCES: feature_history→BigQuery,
+>   narrative_sections→GCS filings, balance_sheet_items→SEC EDGAR companyfacts (no
+>   fixtures in the served set). Batch (520 flags → investigation_branches, prod BQ);
+>   UI disambiguation graph (redink-ui 5a); live deep-dive service (5b) DEPLOYED to
+>   Cloud Run rev 00003 (signal-intel-prod, token-gated). Fable audit + health check
+>   fully worked through: the grounding-ENFORCEMENT gap is closed
+>   (`TerminalResult.trusted` — only RESOLVED/INCONCLUSIVE surface as findings; UI
+>   shows a "not grounding-verified" banner for capped/abandoned; cap raised 5→12 so
+>   repair is reachable; `max_seconds` wall-clock guard). Phase 6 eval in qqq-eval-suite
+>   (Fable independent judge, forced-tool verdicts, `result_trusted` check). Re-measured
+>   the 6-ticker eval post-fix (see 2026-07-16 entry). OPEN: interview
+>   (deferred by user); feature_keys.json upstream drift ([[known_gaps]]); EDGAR
+>   total_debt may exclude short-term borrowings for some filers (CFA caveat in-module).
+> - **Date:** 2026-07-05
+> - **Phase:** 2 — Single-branch agent loop (in progress; harness proven, live run next).
+> - **Landed so far:** ADR-1 (agentic line + termination + budget), ADR-2
+>   (tool-result contract), ADR-3 (tool-binding standard), ADR-4 (build
+>   sequencing: loop-first over breadth-first, fake backends because the
+>   loop-closing property is a function of the round-trip), ADR-5 (generator sees
+>   the answer, judge gets the receipts — result-visibility split).
+> - **Phase-2 harness is complete and proven.** The tool-use loop CLOSES: five
+>   artifacts landed —
+>   - `src/qqq_scoring/investigator/loop.py` — `run_investigation(client, ...)`,
+>     client-agnostic, sync, single branch. Terminates on `end_turn` OR
+>     `investigation_cap` (thin; judge deferred).
+>   - `src/qqq_scoring/investigator/registry.py` — `ToolBinding` + `ToolRegistry`
+>     (the `{name → callable}` dispatch seam; generic).
+>   - `src/qqq_scoring/investigator/tools/feature_history_fake.py` — in-memory data
+>     backend (AAPL story: OCF/NI dips to 0.55 at 2025-06-30, recovers to 0.95 at
+>     +1 quarter; includes a PERIOD_NOT_FILED and a FEATURE_MISSING).
+>   - `feature_history.py` — added the two ADR-3 seams: `parse_model_input`
+>     (str→date) and `to_model_content` (generator-facing serializer).
+>   - `tests/investigator/test_loop_closes.py` — 7 tests, all green (run:
+>     `python3 tests/investigator/test_loop_closes.py`). Scripted fake client, no
+>     key. Proves closure, both termination paths, the parse seam, and the ADR-5
+>     provenance non-leak.
+> - **Live proofs both landed.** `scripts/investigate_demo.py` — model chose the
+>   tool, grounded verdict (single case). `scripts/investigate_variance.py` — the
+>   RIGOROUS ADR-1 proof: same code, two filings (AAPL recovers / WBD stays
+>   broken), tool-call *sequences diverged* (AAPL = single-feature time-series
+>   sweep; WBD = multi-feature corroboration sweep). Path-variance conditioned on
+>   observations is demonstrated, not just asserted. Second fixture ticker (WBD)
+>   added to `feature_history_fake.py`; `_FILED_THROUGH` moved to 2025-12-31.
+> - **JUDGE landed & proven live (ADR-6).** `src/qqq_scoring/investigator/judge.py`
+>   — `Judge` owns termination; `end_turn` is a proposal it adjudicates. G is
+>   deterministic re-fetch + `==` (never trusts in-process evidence); C/O use a
+>   strict `submit_judgment` tool on `claude-sonnet-5`; G gates first. Loop
+>   rewritten: `judge`/`predicate`/`repair_cap` params, TerminalReason gains
+>   RESOLVED/INCONCLUSIVE/ABANDONED (MODEL_STOPPED preserved for judge=None).
+>   Caps are independent (investigation_cap = total-turn ceiling; repair_cap = its
+>   own ABANDONED sub-ceiling — do NOT sum them). Tests: 24 green across
+>   contract(8)/loop(7)/judge(9). Live proof: `scripts/investigate_judged.py WBD`
+>   → Opus proposed "no recovery", Sonnet grounded all 9 evidence items, returned
+>   RESOLVED, correctly treated feature_missing as a limitation not an open question.
+> - **TOOL #2 (GCS narrative) landed & proven live (ADR-7).** Sibling result type
+>   `NarrativeResult` (prose has no numeric value → separate type, illegal states
+>   unspellable). Grounding is now TWO-HEADED, dispatched by a `grounding_mode` tag
+>   each evidence item carries ("tell, don't ask"): `==` re-fetch for structured,
+>   a judge-model semantic support-check for prose. Retrieval is section-addressed
+>   (dict lookup), RAG-swappable behind the same contract (corpus fits in context;
+>   RAG deferred until cross-filing/huge-section need). Registry refactored to
+>   self-contained bindings (each carries its own built schema; the old shared
+>   `feature_keys` was a hidden structured-only assumption the 2nd tool exposed).
+>   New files: `tools/narrative_sections.py` + `_fake.py`; `contracts.py` gains
+>   `GroundingMode`/`NarrativeStatus`/`NarrativeProvenance`/`NarrativeResult`.
+>   Tests: 38 green (contract 8 / loop 7 / judge 9 / narrative 14). Live proof:
+>   `scripts/investigate_narrative.py WBD` — Opus used BOTH tools, judge grounded a
+>   mixed pile (9 numeric by ==, 1 passage by model), RESOLVED "said matches
+>   showed" (candid disclosure). This is backlog #1 "Said vs Showed" as an agent.
+> - **Phase 2 is functionally COMPLETE:** agentic loop + judge + one structured
+>   tool + one unstructured tool, all proven live, 38 tests. Real BQ/GCS bodies
+>   still stubbed (deliberate — fakes prove the mechanism).
+> - **PHASE 3 (disambiguation graph) landed & proven live (ADR-8).** Propose-then-
+>   steer fan-out: a cheap `propose_branches` call names N competing hypotheses (no
+>   investigation budget); the human steers into one; `run_branch` runs the EXISTING
+>   loop with the branch's `predicate` as the only new input. New `graph.py`
+>   (`Flag`, `Branch`, `InvestigationGraph`, `propose_branches`, `run_branch`,
+>   `BranchStatus`). The load-bearing field is `predicate` (the question), NEVER a
+>   metric list (that would collapse the branch into a workflow, killing ADR-1
+>   agency). 42 tests green (contract 8 / loop 7 / judge 9 / narrative 14 / graph 4).
+>   Live: `scripts/investigate_fanout.py h2` — WBD flag fanned into 4
+>   analyst-grade hypotheses; steering into working-capital ran a focused deep-dive;
+>   the grounding judge forced the agent to RETRACT an unsupported inference and
+>   return an honest "cannot confirm with available tools" instead of hallucinating.
+> - **Product signal from the live run:** the toolset has no balance-sheet line
+>   items (receivables/payables/content assets), which capped the working-capital
+>   and revenue-recognition branches. The investigation surfaced its own next tool.
+> - **Open calibration question (note for later):** the judge returned RESOLVED for
+>   a branch whose answer was "hypothesis rejected / not fully testable" — defensible
+>   (the branch question got a grounded answer with a clear lean) but the
+>   resolved/inconclusive boundary is worth tuning as more branches run.
+> - **TOOL #3 (balance-sheet line items) landed & proven live (ADR-9).** Closes the
+>   gap the ADR-8 run exposed. REUSES `FeatureResult` (a line item is a number,
+>   grounded deterministically like a ratio — data difference, not behaviour, so
+>   ADR-7's rule says reuse). New `tools/balance_sheet.py` + `_fake.py`; feature
+>   fake `_SOURCE`→public `SOURCE` (clean logical table name). The honest catch:
+>   "zero judge change" (ADR-7) was optimistic by ONE thing — the judge's single
+>   `reverify` was a hidden one-backend assumption (same shape as the registry's
+>   `feature_keys`), so grounding now routes by `provenance.source`
+>   (`reverify: callable | {source: callable}`). Loop/registry/generator unchanged.
+>   50 tests green (…/ balance-sheet 8). Live: `investigate_fanout.py h2` now
+>   RESOLVES the working-capital branch on real line items — receivables/payables a
+>   small cash source, hypothesis rejected, content amortization identified as driver.
+> - **The self-healing loop:** agent hit a wall → wall named the missing tool → we
+>   built it → identical branch resolved. Logged as a lesson (portfolio gold).
+> - **PHASE 4 (recursive expansion) landed & PROVEN LIVE (ADR-10); 55 tests green.**
+>   `investigate_tree.py h3` grew a tree 2 levels / 4 nodes autonomously off one
+>   human steer (h3 → h3.1 → {h3.1.1, h3.1.2}); node budget (4) and max_depth (2)
+>   both bit exactly; the grounding repair loop fired at EVERY node. (Steering into
+>   an INCONCLUSIVE root (h1) correctly spawned nothing — the leaf rule, live.)
+>   A RESOLVED branch's finding spawns deeper CHILD branches — the graph
+>   grows into a tree. `Branch` gained `children` + `depth`; new `propose_children`
+>   (seeded follow-up proposer), `ExpansionBudget` (global node cap), and `expand`
+>   (recursive orchestrator with injectable `_investigate`/`_propose` so the control
+>   logic is unit-testable with NO LLM). Termination = ADR-1 lifted a level: semantic
+>   stop (proposer returns no new questions) + TWO independent hard caps (`max_depth`,
+>   `max_total_branches` — not summed). Only RESOLVED spawns (grounding-as-precondition
+>   up a level; ABANDONED/INCONCLUSIVE = leaves). Auto-expands within caps (human
+>   steered once at the root). New `scripts/investigate_tree.py`. Tests: graph 4→9
+>   (5 new control-logic tests). Fakes stay ("mock data but real").
+> - **(a) DONE — ADR-11 calibration fix:** three-valued `Confirm`
+>   (CONFIRMED/REFUTED/INDETERMINATE); refuted → RESOLVED. 56→ tests.
+> - **(b) DONE — ADR-12 real BigQuery backend:** `tools/feature_history_bq.py`,
+>   positional period resolution across irregular fiscal calendars, verified live
+>   against `qqq_finance.period_features` (AAPL) + 6 unit tests. 62 tests total.
+>   Fake→real swap = one-line binding change; SOURCE key unchanged so grounding
+>   re-queries real BQ.
+> - **(c) IN PROGRESS — Phase 5 prod surface.** Cut resolved (batch/interactive split):
+>   BATCH `propose_branches` per flagged filing = new **Step 10**
+>   (`explanations/propose_investigation_branches.py`) → BQ `investigation_branches`;
+>   interactive steer + deep-dive = a request-time redink-ui service (UI half = a
+>   separate, larger effort, not built). Step 10 registered in orchestrate.py; dry-run
+>   shows 520 flagged filings.
+> - **FABLE AUDIT (2026-07-12) — ran before the 520-call batch; found real bugs.**
+>   Full tracker: `docs/insights/audit-2026-07-12-fable.md`.
+>   - **FIXED (ADR-13):** SEV-1 PERIOD_NOT_FILED re-grounds as FOUND vs real BQ (fakes
+>     masked it); grounding checked evidence↔source not answer↔numbers (answer-support
+>     head now always-on); repair couldn't fix deterministic failures (now unrepairable
+>     → immediate ABANDONED). Provenance gained `requested_report_date`+`requested_offset`
+>     (reverify replays the request). 70 tests (3 new regressions).
+>   - **FIXED (batch hardening):** per-filing try/except + flush-every-25 + resume;
+>     `--ticker` idempotent; `prompt_version` col; `--model` A/B flag.
+>   - **DEFERRED (tracked):** #4 fiscal-Q4/10-K skip, #5 breadth-first expand, #6
+>     CAP→INCONCLUSIVE, #10–12/#14–15 hygiene — none block the batch; #4–6 are
+>     interactive-service quality.
+> - **AUDIT #9 GATE — A/B DONE (2026-07-12).** Ran Sonnet-5 vs Opus-4-8 proposer on 5
+>   flags (print-only, no BQ write). Both analyst-grade, distinct, correct predicate
+>   format. Opus caught a real subtle cause Sonnet missed (PANW deferred-tax-asset
+>   valuation-allowance reversal); comparable on the other 4. Lean: **Opus for the
+>   batch** (steering surface = product front door; Opus edge on the subtlest flags,
+>   where disambiguation matters most; cost still <~$40). Sonnet defensible to halve
+>   cost. Fable go/no-go re-review → **GO-OPUS** (verified all batch-blockers fixed in code).
+> - **BATCH RUN COMPLETE (2026-07-13).** `investigation_branches` LIVE in prod BQ:
+>   520/520 filings, 0 failures, 2080 branch rows (4/filing), 71 tickers,
+>   model=claude-opus-4-8, prompt_version=v1. ~1.1M tokens, **~$16.30**. Ran via
+>   in-process thread pool (concurrency 8, ~25 min) with per-checkpoint usage logging
+>   (#15). Spot-checked: distinct analyst-grade hypotheses, question-predicates,
+>   status='proposed'. This is the disambiguation surface the redink-ui service consumes.
+> - **#4 FIXED (ADR-14):** fiscal year-end (10-K) skip — keep 10-Q-only comparison,
+>   count + surface `periods_skipped`/`fiscal_periods_skipped`. Verified live. 72 tests.
+> - **Deferred cleanups DONE (2026-07-12):** #11 recursive `graph.get`, #6
+>   CAP_REACHED→new `BranchStatus.CAPPED` + verdict carried, #5 breadth-first
+>   `expand` (no sibling starvation; budget-capped children kept as PROPOSED). 76
+>   tests. Only low-risk hygiene remains deferred: #10 judge no-payload fail-closed,
+>   #12 evidence-dedupe, #14 parameterize `--ticker` SQL, #15 usage logging.
+> - **REDINK-UI 5a DONE (2026-07-13).** Disambiguation graph rendered in the UI:
+>   `redink-ui` `types/redink.ts` (`InvestigationBranchRow`),
+>   `app/api/investigation/[ticker]/[quarter]/route.ts` (BQ read of
+>   investigation_branches), `app/InvestigationGraph.tsx` (client component),
+>   mounted in `app/app/page.tsx` under the Investigation Brief (gated ALERT/FLAG).
+>   Typechecks 0 errors; query verified live (PANW 2023-Q2 → 4 branches). The
+>   "Investigate this branch" button is stubbed for 5b.
+> - **REDINK-UI 5b BUILT (2026-07-13, Fable agent; verified).** Approach A live end
+>   to end: `scoring-pipeline/service/investigator_api.py` (FastAPI: `/health`,
+>   `POST /investigate` → single `run_branch` on real feature_history_bq + fake
+>   narrative/balance_sheet + Judge reverify map; ADR-5 DTO, receipts not leaked;
+>   semaphore cost guard) + `service/{requirements.txt,Dockerfile,README.md}`;
+>   redink-ui `app/api/investigation/[ticker]/[quarter]/investigate/route.ts` proxy
+>   + `types/redink.ts` DTOs + `InvestigationGraph.tsx` button wired (loading,
+>   color-coded terminal states, verdict+evidence inline). VERIFIED by me: redink-ui
+>   `tsc` 0 errors, 76 investigator tests pass, live smoke (WBD h1 → RESOLVED/refuted/
+>   grounded, 118s, 6 tool calls). **NOT deployed — user's Cloud Run step** (sketch
+>   in service/README.md); env: `INVESTIGATOR_SERVICE_URL` (redink-ui),
+>   `ANTHROPIC_API_KEY` (service). Python kept as single source of truth (no TS reimpl).
+> - **DATA BUG surfaced + confirmed:** `output/feature_keys.json` lists
+>   `ocf_to_assets` + `equity_multiplier` which are NOT columns in prod
+>   `period_features` — the real-BQ deep-dive 400'd until Fable intersected the enum
+>   with the live schema. Fix upstream (regenerate feature_keys.json / add columns);
+>   anything trusting feature_keys.json vs real BQ is exposed. [[known_gaps]].
+> - **AUDIT FULLY CLOSED (2026-07-13).** All 15 Fable findings resolved: #10 judge
+>   fail-closed, #12 evidence dedupe, #14 param `--ticker` SQL (the last 3 hygiene),
+>   each with a regression test. 78 investigator tests.
+> - **DATA DRIFT FIXED:** `output/feature_keys.json` corrected to the 8 columns that
+>   actually exist in prod `period_features` (dropped phantom `ocf_to_assets`/
+>   `equity_multiplier`); all 8 verified to query real BQ clean. Open upstream Q
+>   (were they dropped from the table? trend z-cols still reference them) logged in
+>   [[known_gaps]].
+> - **PHASE 6 EVAL BUILT (in progress).** `scoring-pipeline/scripts/eval_capture_investigations.py`
+>   (harness: runs a sample of live investigations → outputs JSON) +
+>   `qqq-eval-suite/evals/investigator_evals.py` (Layer-1 deterministic: terminal
+>   state / evidence present / latency; Layer-2 INDEPENDENT judge = **Fable**
+>   `claude-fable-5`, decorrelated from the system's Opus/Sonnet — grades grounded +
+>   answers-key_question; PASS/FAIL/ABSTAIN per eval_schema). Running a 6-ticker
+>   sample (PANW/INSM/STX/VRSK/APP/FTNT) live; scores pending.
+> - **5b DEPLOYED TO CLOUD RUN & VERIFIED LIVE (2026-07-13).** `investigator-api` on
+>   signal-intel-prod, us-central1:
+>   `https://investigator-api-521865321554.us-central1.run.app`. Public + shared
+>   token (`X-Api-Token`); secrets `anthropic-api-key` + `investigator-api-token` in
+>   Secret Manager; runtime compute-SA granted secretAccessor + BQ dataViewer
+>   (qqq-anomaly-lab) + jobUser (signal-intel-prod). Root `Dockerfile` + `.gcloudignore`
+>   staged for `--source` builds. Verified: /health ok, /investigate WBD h1 ran a real
+>   prod deep-dive (grounded, 6 tools, 125s). **USER TODO in redink-ui env:**
+>   `INVESTIGATOR_SERVICE_URL=<url>`, `INVESTIGATOR_API_TOKEN=<token in scratchpad>`.
+> - **PHASE 6 EVAL RAN (6-ticker sample) — surfaced real issues (working as intended).**
+>   `scripts/eval_capture_investigations.py` + `qqq-eval-suite/evals/investigator_evals.py`.
+>   Findings: (1) **all 6 real flags CAP OUT** (don't converge at investigation_cap=5;
+>   fixtures resolved in 2-4 turns, real multi-driver flags need more) — top Improve
+>   item; (2) **latency high** (avg 551s, FTNT 2300s ≫ 180s budget) — 2 Layer-1 FAILs;
+>   (3) the **Fable independent judge caught a real hallucination** (STX: injected
+>   outside knowledge "Seagate carries negative book equity" contradicting the shown
+>   positive equity — the system's own capped judge missed it) → validates the
+>   decorrelated-judge design; (4) HARNESS BUG: Fable JSON parse brittle → 5 ABSTAINs
+>   (41.7%, false — needs a forced-tool verdict, not a real rubric issue).
+> - **Next Improve items:** raise/tune investigation_cap for real flags + latency;
+>   harden the eval's Fable-verdict parsing (forced tool). Interview deferred until
+>   the user is ready.
+
+---
+
+## Phases (provisional — will firm up as ADRs land)
+
+- [ ] **Phase 0 — Design & framing** *(in progress)*
+  - [ ] ADR-1: agentic loop definition (action space / termination / the line)
+  - [ ] ADR-2: batch vs. interactive boundary (where the human checkpoint sits)
+  - [ ] ADR-3: what a "branch" is (data model for a node in the graph)
+
+- [ ] **Phase 1 — Harness / action space**
+  - Define and stub the tools the agent can call (BigQuery feature history, GCS
+    narrative sections, FMP fundamentals, scoring outputs). Each tool = typed
+    input/output, isolated, testable.
+
+- [ ] **Phase 2 — Single-branch agent loop**
+  - One investigation end-to-end (CLI/batch): take one flagged filing +
+    its `key_question`, let the model pick tools, gather evidence, terminate,
+    return a grounded answer. This is the minimum "truly agentic" proof.
+
+- [ ] **Phase 3 — Disambiguation graph**
+  - Agent proposes N branches (hypotheses) for a flag instead of one path.
+    Render NotebookLM-style. User points at a branch.
+
+- [ ] **Phase 4 — Loop / expansion**
+  - Chosen branch runs autonomously; results may spawn child branches. Define
+    depth/breadth limits and convergence.
+
+- [ ] **Phase 5 — Integration**
+  - Decide: orchestrate.py step (pre-compute level-1) + interactive service in
+    `redink-ui`. Wire per CLAUDE.md orchestrator rule.
+
+- [ ] **Phase 6 — Eval**
+  - Quality gates in `qqq-eval-suite`: is the agent's evidence grounded? Does it
+    answer the key_question? Cost/latency per investigation.
+
+---
+
+## Log discipline
+
+- `decisions.md` — append an ADR the moment a checkpoint resolves.
+- `lessons.md` — append the moment a lesson/rework/surprise surfaces (not at end).
+- This file — update the CURRENT POSITION block before any session ends.

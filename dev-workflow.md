@@ -224,7 +224,7 @@ git branch -d <branch-name>   # delete local branch if not already gone
 
 **After merging scoring-pipeline changes:**
 - If output format changed, copy new CSVs to `redink-ui/data/` and re-deploy
-- If GCS outputs are stale, re-run: `python3 scripts/build_review_pack.py --upload-gcs`
+- If BQ outputs are stale, re-run: `python3 scripts/orchestrate.py --from-step 6`
 
 ---
 

@@ -8,6 +8,22 @@ from sklearn.covariance import MinCovDet
 CLIP = 8.0
 
 
+def to_calendar_quarter(dates: pd.Series) -> pd.Series:
+    """Map report_date values to calendar quarter labels, e.g. '2026-Q1'.
+
+    Groups by the calendar quarter the period-end falls in:
+        Jan–Mar → Q1,  Apr–Jun → Q2,  Jul–Sep → Q3,  Oct–Dec → Q4
+
+    This ensures companies with different fiscal year-ends but overlapping
+    economic periods are compared as peers — e.g. a company with a Jan 31
+    quarter-end and one with a Mar 31 quarter-end both land in Q1 and are
+    scored against each other, as any equity analyst would expect.
+    """
+    dt = pd.to_datetime(dates)
+    quarter = ((dt.dt.month - 1) // 3 + 1)
+    return dt.dt.year.astype(str) + "-Q" + quarter.astype(str)
+
+
 def _robust_zscore(series: pd.Series) -> pd.Series:
     """Robust z-score: (x - median) / (IQR / 1.35).
 
@@ -36,15 +52,79 @@ def self_history_zscores(df: pd.DataFrame, feature_keys: list[str]) -> pd.DataFr
     return result
 
 
-def peer_zscores(df: pd.DataFrame, feature_keys: list[str]) -> pd.DataFrame:
-    """Step 4: For each report_date, z-score each feature relative to peers."""
+def peer_zscores(
+    df: pd.DataFrame,
+    feature_keys: list[str],
+    sector_col: str | None = "gics_sector",
+    min_sector_peers: int = 5,
+) -> pd.DataFrame:
+    """Step 4: Peer-relative z-scores grouped by calendar quarter and GICS sector.
+
+    Primary grouping: (calendar_quarter, gics_sector) — compares companies
+    against peers in the same economic period AND same industry. A SaaS company
+    with negative margins is normal; a retailer with negative margins is a crisis.
+    Sector-adjusted scoring catches the difference.
+
+    Fallback: when a sector group has fewer than min_sector_peers companies,
+    falls back to calendar_quarter-only (universe-wide) grouping. This preserves
+    coverage for small sectors (Utilities, Energy, Materials) that would otherwise
+    never get peer scores.
+
+    Groups by calendar quarter (Q1=Jan–Mar, Q2=Apr–Jun, Q3=Jul–Sep, Q4=Oct–Dec)
+    rather than exact report_date — companies with fiscal quarters ending Jan 31,
+    Feb 28, or Mar 31 all fall in Q1 and are compared as peers.
+    """
     result = df[["ticker", "report_date"]].copy()
+    cal_quarter = to_calendar_quarter(df["report_date"])
+    result["calendar_quarter"] = cal_quarter
+
+    use_sector = (
+        sector_col is not None
+        and sector_col in df.columns
+        and df[sector_col].notna().any()
+    )
+
+    # Compute peer_count per row (size of the group actually used for z-scoring)
+    result["peer_count"] = 0
+    if use_sector:
+        _sector_key = cal_quarter.astype(str) + "|" + df[sector_col].fillna("Unknown").astype(str)
+        for _group_label, _grp in df.groupby(_sector_key):
+            if len(_grp) >= min_sector_peers:
+                result.loc[_grp.index, "peer_count"] = len(_grp)
+            else:
+                _quarter_label = _group_label.split("|")[0]
+                _universe_grp = df[cal_quarter == _quarter_label]
+                result.loc[_grp.index, "peer_count"] = len(_universe_grp)
+    else:
+        for _, _grp in df.groupby(cal_quarter):
+            result.loc[_grp.index, "peer_count"] = len(_grp)
+
     for col in feature_keys:
         zname = f"zp_{col}"
         result[zname] = np.nan
-        for _, grp in df.groupby("report_date"):
-            z = _robust_zscore(grp[col])
-            result.loc[z.index, zname] = z.values
+
+        if use_sector:
+            # Build sector-level peer group key
+            sector_key = cal_quarter.astype(str) + "|" + df[sector_col].fillna("Unknown").astype(str)
+            universe_key = cal_quarter
+
+            for group_label, grp in df.groupby(sector_key):
+                if len(grp) >= min_sector_peers:
+                    # Enough sector peers — use sector-level z-scores
+                    z = _robust_zscore(grp[col])
+                else:
+                    # Too few sector peers — fall back to universe (calendar quarter only)
+                    quarter_label = group_label.split("|")[0]
+                    universe_grp = df[cal_quarter == quarter_label]
+                    z = _robust_zscore(universe_grp[col])
+                    z = z.loc[z.index.isin(grp.index)]
+                result.loc[z.index, zname] = z.values
+        else:
+            # No sector data — group by calendar quarter only
+            for _, grp in df.groupby(cal_quarter):
+                z = _robust_zscore(grp[col])
+                result.loc[z.index, zname] = z.values
+
     return result
 
 
